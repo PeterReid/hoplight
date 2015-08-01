@@ -16,7 +16,7 @@ pub enum Fault {
     InvalidInstruction(u32),
     MemoryOutOfRange,
     ProgramTooLarge,
-    ByteReadTooLarge,
+    ReadTooLarge,
 }
 
 pub enum Request {
@@ -121,7 +121,7 @@ impl Vm {
     fn read_memory_words(&self, start_address: u32, word_count: u32) -> Result<Vec<u32>, Fault> {
         if word_count >= WORD_READ_MAX {
             // Avoid denial of service from a huge memory allocation.
-            return Err(Fault::ByteReadTooLarge);
+            return Err(Fault::ReadTooLarge);
         }
         
         let words = (0..word_count).map(|offset| {
