@@ -1,11 +1,11 @@
 use std::{u32, usize};
-use std::iter::{self, FromIterator};
+use std::iter::{self};
 use crypto::blake2b::Blake2b;
 use crypto::digest::Digest;
 
 /// The maximum number of words a program may use.
 const MEMORY_MAX: usize = 1024 * 1024;
-const BYTE_READ_MAX: u32 = 1024 * 1024 * 4;
+const WORD_READ_MAX: u32 = 1024 * 1024;
 pub struct Vm {
     memory: Vec<u32>,
     pc: u32,
@@ -20,9 +20,9 @@ pub enum Fault {
 }
 
 pub enum Request {
-    StoreData{ key: Vec<u8>, value: Vec<u8> },
-    LoadData{ key: Vec<u8>, destination_address: u32, destination_length: u32 },
-    Send{ recipient: Vec<u8>, message: Vec<u8> },
+    StoreData{ key: Vec<u32>, value: Vec<u32> },
+    LoadData{ key: Vec<u32>, destination_address: u32, destination_word_count: u32 },
+    Send{ recipient: Vec<u32>, message: Vec<u32> },
 }
 
 mod opcode {
@@ -33,6 +33,18 @@ mod opcode {
 }
 
 pub type OpResult = Result<Option<Request>, Fault>;
+
+fn words_to_le_bytes(words: &[u32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(words.len()*4);
+    for word in words.iter() {
+        bytes.push(((word>> 0) & 0xffu32) as u8);
+        bytes.push(((word>> 8) & 0xffu32) as u8);
+        bytes.push(((word>>16) & 0xffu32) as u8);
+        bytes.push(((word>>24) & 0xffu32) as u8);
+    }
+    
+    bytes
+}
 
 impl Vm {
     pub fn new(initial_memory: &[u32]) -> Result<Vm, Fault> {
@@ -105,83 +117,67 @@ impl Vm {
         Ok(None)
     }
     
-    /// Read contiguous bytes from memory. The start_address refers
-    /// to the initial word's index, so the read's start must be 
-    /// word-aligned. 
-    /// Words are interpreted as little-endian; the least-significant
-    /// byte of each word comes first.
-    fn read_memory_bytes(&self, start_address: u32, byte_length: u32) -> Result<Vec<u8>, Fault> {
-        if byte_length >= BYTE_READ_MAX {
+    /// Read contiguous words from memory.
+    fn read_memory_words(&self, start_address: u32, word_count: u32) -> Result<Vec<u32>, Fault> {
+        if word_count >= WORD_READ_MAX {
             // Avoid denial of service from a huge memory allocation.
             return Err(Fault::ByteReadTooLarge);
         }
         
-        let mut bs = Vec::with_capacity(byte_length as usize);
+        let words = (0..word_count).map(|offset| {
+            self.read_memory(start_address.wrapping_add(offset))
+        }).collect();
         
-        let mut byte_length_remaining = byte_length;
-        let mut read_address = start_address;
-        while byte_length_remaining >= 4 {
-            let word = self.read_memory(read_address);
-            bs.push(((word>> 0) & 0xff) as u8);
-            bs.push(((word>> 8) & 0xff) as u8);
-            bs.push(((word>>16) & 0xff) as u8);
-            bs.push(((word>>24) & 0xff) as u8);
-            byte_length_remaining -= 4;
-            read_address = read_address.wrapping_add(1);
-        }
-        
-        let mut final_word = self.read_memory(read_address);
-        while byte_length_remaining > 0 {
-            bs.push((final_word & 0xff) as u8);
-            final_word = final_word >> 8;
-            byte_length_remaining -= 1;
-        }
-        
-        assert_eq!(bs.len() as u32, byte_length);
-        
-        return Ok(bs);
+        return Ok(words);
     }
     
     fn exec_store_hash(&mut self) -> OpResult {
         let start_word = self.read_pc_memory(1);
-        let byte_length = self.read_pc_memory(2);
+        let word_count = self.read_pc_memory(2);
         
-        let data = try!(self.read_memory_bytes(start_word, byte_length));
+        let data = try!(self.read_memory_words(start_word, word_count));
         
-        let mut hash = Vec::from_iter( iter::repeat(0u8).take(64) );
+        let mut hash = [0u8; 64];//Vec::from_iter( iter::repeat(0u8).take(64) );
         let mut hasher = Blake2b::new(hash.len());
-        hasher.input(&data);
+        hasher.input(&words_to_le_bytes(&data));
         hasher.result(&mut hash[..]);
         
         self.advance_pc(3);
-        self.incur_cost((byte_length as u64) * 1000);
+        self.incur_cost((word_count as u64) * 1000);
         
-        Ok(Some(Request::StoreData{ key: hash, value: data }))
+        let hash_words = (0..16).map(|word_offset| word_offset*4).map(|x| {
+            ((hash[x+0] as u32)<< 0) | 
+            ((hash[x+1] as u32)<< 8) |
+            ((hash[x+2] as u32)<<16) |
+            ((hash[x+3] as u32)<<24)
+        }).collect();
+        
+        Ok(Some(Request::StoreData{ key: hash_words, value: data }))
     }
     
     fn exec_load_data(&mut self) -> OpResult {
         let hash_start_word = self.read_pc_memory(1);
         let dest_start_word = self.read_pc_memory(2);
-        let dest_byte_length = self.read_pc_memory(3);
+        let dest_word_count = self.read_pc_memory(3);
         
-        let hash = try!(self.read_memory_bytes(hash_start_word, 64));
+        let hash = try!(self.read_memory_words(hash_start_word, 64/4));
         
         self.advance_pc(4);
         self.incur_cost(1);
         
-        Ok(Some(Request::LoadData{ key: hash, destination_address: dest_start_word, destination_length: dest_byte_length }))
+        Ok(Some(Request::LoadData{ key: hash, destination_address: dest_start_word, destination_word_count: dest_word_count }))
     }
     
     fn exec_send(&mut self) -> OpResult {
         let recipient_start = self.read_pc_memory(1);
         let message_start = self.read_pc_memory(2);
-        let message_byte_length = self.read_pc_memory(3);
+        let message_word_count = self.read_pc_memory(3);
         
-        let recipient = try!(self.read_memory_bytes(recipient_start, 32));
-        let message = try!(self.read_memory_bytes(message_start, message_byte_length));
+        let recipient = try!(self.read_memory_words(recipient_start, 8));
+        let message = try!(self.read_memory_words(message_start, message_word_count));
         
         self.advance_pc(4);
-        self.incur_cost(30 + (message_byte_length as u64) * 1);
+        self.incur_cost(30 + (message_word_count as u64) * 1);
         
         Ok(Some(Request::Send{ recipient: recipient, message: message }))
     }
@@ -214,21 +210,17 @@ mod test {
     #[test]
     fn hash() {
         let mut vm = Vm::new(&[
-            opcode::STORE_HASH, 3,5,
+            opcode::STORE_HASH, 3,2,
             0x04030201, 0x00000005]).ok().unwrap();
         match vm.step() {
             Ok(Some(Request::StoreData{key, value})) => {
-                assert_eq!(value, [1,2,3,4,5].to_vec());
+                assert_eq!(value, [0x04030201, 0x00000005].to_vec());
                 assert_eq!(key, [ // b2sum of the value
-                    0x6b, 0x4c, 0x45, 0xfb, 0x95, 0x47, 0xe1, 0x9c,
-                    0x90, 0x85, 0x16, 0x92, 0x76, 0x4f, 0x39, 0xfe,
-                    0x92, 0x7a, 0x8c, 0xe7, 0x29, 0x5d, 0xd1, 0x5c,
-                    0x8e, 0x15, 0xbf, 0xd7, 0x8d, 0xd7, 0x53, 0xc4,
-                    0xbc, 0xc5, 0x7a, 0xa9, 0x29, 0xd4, 0x39, 0x4e,
-                    0x62, 0x18, 0xae, 0x8f, 0xd0, 0xb1, 0xc8, 0xbf,
-                    0x5f, 0x99, 0x10, 0xb9, 0xbd, 0xd2, 0x07, 0xc6,
-                    0x02, 0xe0, 0x6c, 0x30, 0x13, 0x21, 0xa0, 0x23,
-                    ].to_vec());
+                    0x56d315bd, 0x5557459d, 0x690186f3, 0xe1e38838,
+                    0x9eecbd81, 0xfe08f530, 0x1d3da984, 0xef68c7a8,
+                    0x7e5558ff, 0x70c8610c, 0x160b5a73, 0x1edf1571,
+                    0x93d126ba, 0x00a2a0ae, 0xd42fd6ac, 0x9aa6461c,
+                ].to_vec());
             }
             _ => { panic!("Expected a store request") }
         }
@@ -237,7 +229,7 @@ mod test {
     #[test]
     fn send() {
         let mut vm = Vm::new(&[
-            opcode::SEND, /* recipient start = */ 6, /*message start = */ 4, /*message bytes = */ 8,
+            opcode::SEND, /* recipient start = */ 6, /*message start = */ 4, /*message words = */ 2,
             0x04030201, 0x08070605, 
             // recipient
             0x11111111, 0x22222222, 0x33333333, 0x44444444,
@@ -245,10 +237,10 @@ mod test {
             ]).ok().unwrap();
         match vm.step() {
             Ok(Some(Request::Send{recipient, message})) => {
-                assert_eq!(recipient.len(), 32);
-                assert_eq!(recipient[0], 0x11);
-                assert_eq!(recipient[31], 0x88);
-                assert_eq!(message, [1,2,3,4,5,6,7,8].to_vec());
+                assert_eq!(recipient, [
+                    0x11111111, 0x22222222, 0x33333333, 0x44444444,
+                    0x55555555, 0x66666666, 0x77777777, 0x88888888].to_vec());
+                assert_eq!(message, [0x04030201, 0x08070605].to_vec());
             }
             _ => { panic!("Expected a store request") }
         }
