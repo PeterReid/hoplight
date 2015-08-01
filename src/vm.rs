@@ -1,9 +1,11 @@
 use std::{u32, usize};
-use std::iter;
+use std::iter::{self, FromIterator};
+use crypto::blake2b::Blake2b;
+use crypto::digest::Digest;
 
 /// The maximum number of words a program may use.
-const MEMORY_MAX: usize = 1024*1024;
-
+const MEMORY_MAX: usize = 1024 * 1024;
+const BYTE_READ_MAX: u32 = 1024 * 1024 * 4;
 pub struct Vm {
     memory: Vec<u32>,
     pc: u32,
@@ -14,15 +16,16 @@ pub enum Fault {
     InvalidInstruction(u32),
     MemoryOutOfRange,
     ProgramTooLarge,
+    ByteReadTooLarge,
 }
 
 pub enum Request {
-    Store,
+    Store{ key: Vec<u8>, value: Vec<u8> },
 }
 
 mod opcode {
     pub const ADD: u32 = 1;
-    
+    pub const STORE_HASH: u32 = 2;
 }
 
 pub type OpResult = Result<Option<Request>, Fault>;
@@ -98,11 +101,64 @@ impl Vm {
         Ok(None)
     }
     
+    /// Read contiguous bytes from memory. The start_address refers
+    /// to the initial word's index, so the read's start must be 
+    /// word-aligned. 
+    /// Words are interpreted as little-endian; the least-significant
+    /// byte of each word comes first.
+    fn read_memory_bytes(&self, start_address: u32, byte_length: u32) -> Result<Vec<u8>, Fault> {
+        if byte_length >= BYTE_READ_MAX {
+            // Avoid denial of service from a huge memory allocation.
+            return Err(Fault::ByteReadTooLarge);
+        }
+        
+        let mut bs = Vec::with_capacity(byte_length as usize);
+        
+        let mut byte_length_remaining = byte_length;
+        let mut read_address = start_address;
+        while byte_length_remaining >= 4 {
+            let word = self.read_memory(read_address);
+            bs.push(((word>> 0) & 0xff) as u8);
+            bs.push(((word>> 8) & 0xff) as u8);
+            bs.push(((word>>16) & 0xff) as u8);
+            bs.push(((word>>24) & 0xff) as u8);
+            byte_length_remaining -= 4;
+            read_address = read_address.wrapping_add(1);
+        }
+        
+        let mut final_word = self.read_memory(read_address);
+        while byte_length_remaining > 0 {
+            bs.push((final_word & 0xff) as u8);
+            final_word = final_word >> 8;
+            byte_length_remaining -= 1;
+        }
+        
+        assert_eq!(bs.len() as u32, byte_length);
+        
+        return Ok(bs);
+    }
+    
+    fn exec_store_hash(&mut self) -> OpResult {
+        let start_word = self.read_pc_memory(1);
+        let byte_length = self.read_pc_memory(2);
+        
+        let data = try!(self.read_memory_bytes(start_word, byte_length));
+        
+        let mut hash = Vec::from_iter( iter::repeat(0u8).take(64) );
+        let mut hasher = Blake2b::new(hash.len());
+        hasher.input(&data);
+        hasher.result(&mut hash[..]);
+        
+        self.incur_cost((byte_length as u64) * 1000);
+        
+        Ok(Some(Request::Store{ key: hash, value: data }))
+    }
+    
     pub fn step(&mut self) -> OpResult {
         let opcode = self.read_pc_memory(0);
         match opcode {
             opcode::ADD => self.exec_add(),
-            
+            opcode::STORE_HASH => self.exec_store_hash(),
             unknown_opcode => Err(Fault::InvalidInstruction(unknown_opcode))
         }
     }
@@ -110,7 +166,7 @@ impl Vm {
 
 #[cfg(test)]
 mod test {
-    use super::{Vm, opcode};
+    use super::{Vm, opcode, Request};
     
     #[test]
     fn add() {
@@ -119,5 +175,29 @@ mod test {
             0x80000004, 0x90000003]).ok().unwrap();
         assert!(vm.step().ok().unwrap().is_none());
         assert_eq!(vm.read_memory(6), 0x10000007);
+    }
+
+    #[test]
+    fn hash() {
+        let mut vm = Vm::new(&[
+            opcode::STORE_HASH, 3,5,
+            0x04030201, 0x00000005]).ok().unwrap();
+        match vm.step() {
+            Ok(Some(Request::Store{key, value})) => {
+                println!("{:?} {:?}", key, value);
+                assert_eq!(value, [1,2,3,4,5].to_vec());
+                assert_eq!(key, [ // b2sum of the value
+                    0x6b, 0x4c, 0x45, 0xfb, 0x95, 0x47, 0xe1, 0x9c,
+                    0x90, 0x85, 0x16, 0x92, 0x76, 0x4f, 0x39, 0xfe,
+                    0x92, 0x7a, 0x8c, 0xe7, 0x29, 0x5d, 0xd1, 0x5c,
+                    0x8e, 0x15, 0xbf, 0xd7, 0x8d, 0xd7, 0x53, 0xc4,
+                    0xbc, 0xc5, 0x7a, 0xa9, 0x29, 0xd4, 0x39, 0x4e,
+                    0x62, 0x18, 0xae, 0x8f, 0xd0, 0xb1, 0xc8, 0xbf,
+                    0x5f, 0x99, 0x10, 0xb9, 0xbd, 0xd2, 0x07, 0xc6,
+                    0x02, 0xe0, 0x6c, 0x30, 0x13, 0x21, 0xa0, 0x23,
+                    ].to_vec());
+            }
+            _ => { panic!("Expected a store request") }
+        }
     }
 }
