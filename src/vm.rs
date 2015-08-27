@@ -1,4 +1,5 @@
 use std::{u32, usize};
+use std::cmp::Ordering;
 use std::iter::{self};
 use crypto::blake2b::Blake2b;
 use crypto::digest::Digest;
@@ -23,6 +24,8 @@ pub enum Request {
     StoreData{ key: Vec<u32>, value: Vec<u32> },
     LoadData{ key: Vec<u32>, destination_address: u32, destination_word_count: u32 },
     Send{ recipient: Vec<u32>, message: Vec<u32> },
+    LoadSelfAddress{ destination_address: u32 },
+    LoadNearestNeighbors{ near_to: Vec<u32>, count: u32, destination_address: u32 },
 }
 
 mod opcode {
@@ -30,6 +33,10 @@ mod opcode {
     pub const STORE_HASH: u32 = 2;
     pub const LOAD_HASH: u32 = 3;
     pub const SEND: u32 = 4;
+    pub const JUMP_IF_ZERO: u32 = 5;
+    pub const VECTOR_COMPARE: u32 = 6;
+    pub const LOAD_SELF_ADDRESS: u32 = 7;
+    pub const LOAD_NEAREST_NEIGHBORS: u32 = 8;
 }
 
 pub type OpResult = Result<Option<Request>, Fault>;
@@ -182,6 +189,67 @@ impl Vm {
         Ok(Some(Request::Send{ recipient: recipient, message: message }))
     }
     
+    fn exec_jump_if_zero(&mut self) -> OpResult {
+        let jump_target = self.read_pc_memory(1);
+        let condition_address = self.read_pc_memory(2);
+        let condition = self.read_memory(condition_address);
+        
+        if condition != 0 {
+            self.pc = jump_target;
+        } else {
+            self.advance_pc(3);
+        }
+        self.incur_cost(1);
+        
+        Ok(None)
+    }
+    
+    fn exec_vector_compare(&mut self) -> OpResult {
+        let src_1_start = self.read_pc_memory(1);
+        let src_2_start = self.read_pc_memory(2);
+        let word_length = self.read_pc_memory(3);
+        let destination = self.read_pc_memory(4);
+        self.advance_pc(5);
+        
+        let src_1 = try!(self.read_memory_words(src_1_start, word_length));
+        let src_2 = try!(self.read_memory_words(src_2_start, word_length));
+        
+        let result = match src_1.cmp(&src_2) {
+            Ordering::Less => 0xffffffff,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        };
+        
+        try!(self.write_memory(destination, result));
+        
+        Ok(None)
+    }
+    
+    fn exec_load_self_address(&mut self) -> OpResult {
+        let destination = self.read_pc_memory(1);
+        self.advance_pc(2);
+        
+        Ok(Some(Request::LoadSelfAddress{
+            destination_address: destination
+        }))
+    }
+    
+    fn exec_nearest_neighbors(&mut self) -> OpResult {
+        let near_start = self.read_pc_memory(1);
+        let destination_start = self.read_pc_memory(2);
+        let count = self.read_pc_memory(3);
+        self.advance_pc(4);
+        
+        let near_to = try!(self.read_memory_words(near_start, 8));
+        
+        Ok(Some(Request::LoadNearestNeighbors{
+            near_to: near_to,
+            count: count,
+            destination_address: destination_start,
+        }))
+    }
+    
+    
     pub fn step(&mut self) -> OpResult {
         let opcode = self.read_pc_memory(0);
         match opcode {
@@ -189,6 +257,10 @@ impl Vm {
             opcode::STORE_HASH => self.exec_store_hash(),
             opcode::LOAD_HASH => self.exec_load_data(),
             opcode::SEND => self.exec_send(),
+            opcode::JUMP_IF_ZERO => self.exec_jump_if_zero(),
+            opcode::VECTOR_COMPARE => self.exec_vector_compare(),
+            opcode::LOAD_SELF_ADDRESS => self.exec_load_self_address(),
+            opcode::LOAD_NEAREST_NEIGHBORS => self.exec_nearest_neighbors(),
             unknown_opcode => Err(Fault::InvalidInstruction(unknown_opcode))
         }
     }
