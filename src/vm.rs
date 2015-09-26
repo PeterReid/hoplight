@@ -3,6 +3,9 @@ use std::cmp::Ordering;
 use std::iter::{self};
 use crypto::blake2b::Blake2b;
 use crypto::digest::Digest;
+use std::io::Cursor;
+
+use byteorder::{LittleEndian, ReadBytesExt};
 
 /// The maximum number of words a program may use.
 const MEMORY_MAX: usize = 1024 * 1024;
@@ -40,6 +43,13 @@ mod opcode {
 }
 
 pub type OpResult = Result<Option<Request>, Fault>;
+
+pub fn le_bytes_to_words(bytes: &[u8]) -> Vec<u32> {
+    let word_count = bytes.len() / 4;
+    let mut cursor = Cursor::new(bytes);;
+    
+    (0..word_count).map(|_| cursor.read_u32::<LittleEndian>().unwrap()).collect()
+}
 
 fn words_to_le_bytes(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len()*4);
