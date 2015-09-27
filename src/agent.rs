@@ -7,9 +7,10 @@ use crypto::aead::{/*AeadEncryptor,*/AeadDecryptor};
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt};
 use std::iter;
 use vm::{self, Vm};
+use content_packet::ContentPacket;
 
 struct NeighborState {
     address: IpAddressPort,
@@ -47,7 +48,9 @@ pub struct Agent{
 pub enum HandleError {
     UnrecognizedPacket,
     UnrecognizedNeighbor,
+    InternalLimitExceeded,
     BadChecksum,
+    InternalError,
 }
 
 pub const CONTENTFUL_PACKET_THRESHOLD: usize = 
@@ -89,22 +92,13 @@ impl Agent{
     }
     
     pub fn handle_contentful_packet(&mut self, packet: &[u8]) -> Result<(), HandleError> {
-        let mut cursor = Cursor::new(packet);
-        let packet_identifier = cursor.read_u64::<LittleEndian>().unwrap();
-        let (stream_with, packet_number) = try!(self.look_up_packet_identifier(packet_identifier));
+        let parts = try!(ContentPacket::decode(packet));
         
-        // TODO: Check this cast to usize, in case of 16-bit addressing.
-        let length_words_plus = cursor.read_u32::<LittleEndian>().unwrap() as usize;
-        let remaining_bytes = packet.len() - (8 + 4 + 16);
-        let remaining_words = remaining_bytes / 4;
-        let checksum = &packet[12..12+16];
-        let payload_words = 1 + length_words_plus % remaining_words;
-        let payload_bytes = (payload_words * 4) as usize; // TODO: Handle overflow
-        let encrypted_payload = &packet[12+16..12+16+payload_bytes];
+        let (stream_with, packet_number) = try!(self.look_up_packet_identifier(parts.packet_identifier));
         
         let mut neighbor_state = try!(self.look_up_neighbor_state(&stream_with));
         
-        let payload = try!(neighbor_state.decrypt_payload(packet_number, encrypted_payload, checksum));
+        let payload = try!(neighbor_state.decrypt_payload(packet_number, parts.encrypted_payload, parts.checksum));
         let payload_words = vm::le_bytes_to_words(&payload);
         
         Vm::new(&payload_words);//.exec();
