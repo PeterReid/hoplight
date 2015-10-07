@@ -4,16 +4,19 @@ use ip_address_port::IpAddressPort;
 use crypto::chacha20poly1305::ChaCha20Poly1305;
 use crypto::ed25519;
 use crypto::aead::{AeadEncryptor, AeadDecryptor};
+use crypto::chacha20::ChaCha20;
+use crypto::symmetriccipher::SynchronousStreamCipher;
 
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::iter;
 use vm::{self, Vm};
 use content_packet::ContentPacket;
 use initiation_packet::{self, InitiationPacketInner, InitiationPacketOuter};
 use rand::Rng;
+use stream;
 
 struct NeighborState {
     address: IpAddressPort,
@@ -94,6 +97,7 @@ pub enum HandleError {
     BadSignature,
     InternalError,
     CannotStreamWithSelf,
+    NotANeighbor,
 }
 
 pub const CONTENTFUL_PACKET_THRESHOLD: usize = 
@@ -202,33 +206,41 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         // There might eventually be a policy decision here where we decide whether or not it is worth keeping this
         // this new neighbor in memory. For now, we will just accept them.
         
-        if let Some(neighbor_state) = self.neighbors.get_mut(&sender_identity) {
-            let (stream_private, _stream_public) = ed25519::keypair(&neighbor_state.own_seed[..]);
+        let mut neighbor_is_known = 
+            if let Some(neighbor_state) = self.neighbors.get_mut(&sender_identity) {
+                let (stream_private, _stream_public) = ed25519::keypair(&neighbor_state.own_seed[..]);
+                
+                neighbor_state.address = *source;
+                neighbor_state.neighbor_public_key = *parts.ephemeral_public_key;
+                neighbor_state.symmetric_key = ed25519::exchange(parts.ephemeral_public_key, &stream_private[..]);
+                
+                
+                true
+            } else {
+                false
+            };
+        
+        if !neighbor_is_known {
+            let neighbor_is_later = try!(sender_identity.is_greater_than(&self.identity).map_err(|_| HandleError::CannotStreamWithSelf));
+            let own_seed = { let mut bs = [0u8;32]; self.environment.fill_bytes(&mut bs); bs };
             
-            neighbor_state.address = *source;
-            neighbor_state.neighbor_public_key = *parts.ephemeral_public_key;
-            neighbor_state.symmetric_key = ed25519::exchange(parts.ephemeral_public_key, &stream_private[..]);
+            let (stream_private, stream_public) = ed25519::keypair(&own_seed[..]);
+            let stream_symmetric_key = ed25519::exchange(parts.ephemeral_public_key, &stream_private[..]); 
             
-            return Ok( () )
+            self.send_initiation_packet(&sender_identity, source, &own_seed);
+            
+            self.neighbors.insert(sender_identity, NeighborState {
+                address: *source,
+                symmetric_key: stream_symmetric_key,
+                incoming_message_nonce: if neighbor_is_later { 1 } else { 0 },
+                outgoing_message_nonce: if neighbor_is_later { 0 } else { 1 },
+                neighbor_public_key: *parts.ephemeral_public_key,
+                own_seed: own_seed,
+            });
         }
         
-        let neighbor_is_later = try!(sender_identity.is_greater_than(&self.identity).map_err(|_| HandleError::CannotStreamWithSelf));
-        let own_seed = { let mut bs = [0u8;32]; self.environment.fill_bytes(&mut bs); bs };
-        
-        let (stream_private, stream_public) = ed25519::keypair(&own_seed[..]);
-        let stream_symmetric_key = ed25519::exchange(parts.ephemeral_public_key, &stream_private[..]); 
-        
-        self.send_initiation_packet(&sender_identity, source, &own_seed);
-        
-        self.neighbors.insert(sender_identity, NeighborState {
-            address: *source,
-            symmetric_key: stream_symmetric_key,
-            incoming_message_nonce: if neighbor_is_later { 1 } else { 0 },
-            outgoing_message_nonce: if neighbor_is_later { 0 } else { 1 },
-            neighbor_public_key: *parts.ephemeral_public_key,
-            own_seed: own_seed,
-        });
-        
+        self.prepare_some_packet_identifiers(&sender_identity);
+            
         Ok( () )
     }
     
@@ -270,6 +282,27 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         self.environment.send(neighbor_location, &packet[..]);
     }
     
+    
+    fn prepare_some_packet_identifiers(&mut self, neighbor: &Identity) {
+        let neighbor_state = if let Some(x) = self.neighbors.get(neighbor) { x } else { 
+            return;
+        };
+        
+        let s = stream::Stream{
+            key: neighbor_state.symmetric_key.clone(),
+            neighbor_is_lexico_later:  *neighbor > self.identity,
+            outgoing_message_index: 0,
+            outgoing_message_identifiers: [0u64; 8],
+        };
+        
+        let mut identifiers = [0u64; 32];
+        s.generate_identifiers(stream::Direction::Incoming, 0, &mut identifiers[..]);
+        
+        for (packet_index, identifier) in identifiers.iter().enumerate() {
+            self.upcoming_packet_identifiers.insert(*identifier, (*neighbor, packet_index as u64));
+        }
+    }
+    
     fn initiate_stream_with(&mut self, neighbor_identity: &Identity, neighbor_location: &IpAddressPort) {
         let own_seed = { let mut bs = [0u8;32]; self.environment.fill_bytes(&mut bs); bs };
         
@@ -287,6 +320,35 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         self.environment.send(neighbor_location, &packet[..]);
         
         self.neighbors.insert(*neighbor_identity, n);
+    }
+    
+    pub fn send_to(&mut self, neighbor: &Identity, payload: &[u8]) -> Result<(), HandleError> {
+        let neighbor_state = if let Some(x) = self.neighbors.get(neighbor) { x } else {
+            // TODO: Return some kind of failure...
+            return Err(HandleError::NotANeighbor);
+        };
+        
+        // TODO: The stream should actually be stored
+        let mut s = stream::Stream{
+            key: neighbor_state.symmetric_key.clone(),
+            neighbor_is_lexico_later:  *neighbor > self.identity,
+            outgoing_message_index: 0,
+            outgoing_message_identifiers: [0u64; 8],
+        };
+        
+        let (packet_index, identifier) = s.produce_outgoing_identifier();
+        
+        
+        let packet_size = payload.len() + CONTENTFUL_PACKET_THRESHOLD; // TODO
+        let mut buffer: Vec<u8> = iter::repeat(0).take(packet_size).collect();
+        {
+            let mut packet_writer = try!(ContentPacket::prepare(&mut buffer[..], payload.len(), identifier, &mut self.environment));
+            ChaCha20Poly1305::new(&s.key[..], &neighbor_state.make_nonce(packet_index)[..], &[]).encrypt(payload, packet_writer.encrypted_payload, packet_writer.checksum);
+        }
+        self.environment.send(&neighbor_state.address, &buffer[..]);
+        
+        println!("send identifier: {}", identifier);
+        Ok( () )
     }
 }
 
@@ -349,6 +411,21 @@ mod test{
         }
     }
     
+    fn exchange(agents: &mut [&mut Agent<DummyEnvironment>]) {
+        let mut in_flights = Vec::new();
+        for agent in agents.iter_mut() {
+            drain(&mut in_flights, &mut agent.environment);
+        }
+        
+        for in_flight in in_flights.into_iter() {
+            for maybe_dest in agents.iter_mut() {
+                if maybe_dest.environment.location == in_flight.destination {
+                    maybe_dest.handle_packet(&in_flight.source, &in_flight.contents[..]);
+                }
+            }
+        }
+    }
+    
     #[test]
     fn initiate() {
         let mut a = Agent::new(
@@ -364,24 +441,12 @@ mod test{
         a.initiate_stream_with(&b.identity, &b.environment.location);
         
         for _ in 0..2 {
-            let mut in_flights = Vec::new();
-            drain(&mut in_flights, &mut a.environment);
-            drain(&mut in_flights, &mut b.environment);
-            
-            for in_flight in in_flights.into_iter() {
-                let dest = 
-                    if a.environment.location == in_flight.destination {
-                        &mut a
-                    } else if b.environment.location == in_flight.destination {
-                        &mut b
-                    } else {
-                        continue;
-                    };
-                
-                dest.handle_packet(&in_flight.source, &in_flight.contents[..]);
-                
-            }
+            exchange(&mut [&mut a, &mut b]);
         }
+        
+        a.send_to(&b.identity, &[1,2,3,4]);
+        
+        exchange(&mut [&mut a, &mut b]);
         
         panic!("see");
     }

@@ -48,7 +48,6 @@ impl<'a> ContentPacket<'a> {
         let remaining_words = remaining_bytes / 4;
         let checksum = array_ref![packet,CHECKSUM_START,CHECKSUM_LEN];
         let payload_words = length_words_plus % (1 + remaining_words);
-        println!("{} mod ({}+1)", length_words_plus, remaining_words);
         let payload_bytes = (payload_words * 4).as_usize_checked().unwrap();
         let encrypted_payload = &packet[PAYLOAD_START..PAYLOAD_START+payload_bytes];
         

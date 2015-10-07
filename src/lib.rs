@@ -6,6 +6,7 @@ pub mod vm;
 
 mod content_packet;
 mod initiation_packet;
+mod stream;
 
 #[macro_use] extern crate arrayref;
 extern crate byteorder;
