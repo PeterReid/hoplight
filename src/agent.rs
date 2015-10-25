@@ -12,7 +12,7 @@ use std::io::Cursor;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::iter;
-use vm::{self, Vm};
+use vm::{self, Vm, Fault};
 use content_packet::ContentPacket;
 use initiation_packet::{self, InitiationPacketInner, InitiationPacketOuter};
 use rand::Rng;
@@ -72,12 +72,18 @@ impl NeighborState {
     }
 }
 
+pub struct Task {
+    requestor: Identity,
+    vm: Vm,
+}
+
 pub trait AgentEnvironment {
     fn get_current_timestamp(&self) -> u64;
     fn send(&mut self, address: &IpAddressPort, packet: &[u8]);
-}
-
-impl AgentEnvironment {
+    
+    /// Schedule a task for execution. This will _not_ wait until the task is complete
+    /// to return.
+    fn execute(&mut self, task: Task);
 }
 
 pub struct Agent<E>{
@@ -85,7 +91,7 @@ pub struct Agent<E>{
     private_key: [u8; 64],
     neighbors: HashMap<Identity, NeighborState>,
     upcoming_packet_identifiers: HashMap<u64, (Identity, u64)>,
-    environment: E,
+    pub environment: E,
 }
 
 #[derive(Debug)]
@@ -98,6 +104,7 @@ pub enum HandleError {
     InternalError,
     CannotStreamWithSelf,
     NotANeighbor,
+    VmCreationFailed(Fault),
 }
 
 pub const CONTENTFUL_PACKET_THRESHOLD: usize = 
@@ -162,12 +169,18 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         
         let (stream_with, packet_number) = try!(self.look_up_packet_identifier(parts.packet_identifier));
         
-        let mut neighbor_state = try!(self.look_up_neighbor_state(&stream_with));
+        let payload_words = {
+            let mut neighbor_state = try!(self.look_up_neighbor_state(&stream_with));
         
-        let payload = try!(neighbor_state.decrypt_payload(packet_number, parts.encrypted_payload, parts.checksum));
-        let payload_words = vm::le_bytes_to_words(&payload);
+            let payload = try!(neighbor_state.decrypt_payload(packet_number, parts.encrypted_payload, parts.checksum));
+            vm::le_bytes_to_words(&payload)
+        };
         
-        Vm::new(&payload_words);//.exec();
+        let vm = try!(Vm::new(&payload_words).map_err(|e| 
+            HandleError::VmCreationFailed(e)
+        ));
+        
+        self.environment.execute(Task{ requestor: stream_with, vm: vm});
         
         Ok( () )
     }
@@ -206,7 +219,7 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         // There might eventually be a policy decision here where we decide whether or not it is worth keeping this
         // this new neighbor in memory. For now, we will just accept them.
         
-        let mut neighbor_is_known = 
+        let neighbor_is_known = 
             if let Some(neighbor_state) = self.neighbors.get_mut(&sender_identity) {
                 let (stream_private, _stream_public) = ed25519::keypair(&neighbor_state.own_seed[..]);
                 
@@ -224,7 +237,7 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
             let neighbor_is_later = try!(sender_identity.is_greater_than(&self.identity).map_err(|_| HandleError::CannotStreamWithSelf));
             let own_seed = { let mut bs = [0u8;32]; self.environment.fill_bytes(&mut bs); bs };
             
-            let (stream_private, stream_public) = ed25519::keypair(&own_seed[..]);
+            let (stream_private, _stream_public) = ed25519::keypair(&own_seed[..]);
             let stream_symmetric_key = ed25519::exchange(parts.ephemeral_public_key, &stream_private[..]); 
             
             self.send_initiation_packet(&sender_identity, source, &own_seed);
@@ -303,7 +316,7 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         }
     }
     
-    fn initiate_stream_with(&mut self, neighbor_identity: &Identity, neighbor_location: &IpAddressPort) {
+    pub fn initiate_stream_with(&mut self, neighbor_identity: &Identity, neighbor_location: &IpAddressPort) {
         let own_seed = { let mut bs = [0u8;32]; self.environment.fill_bytes(&mut bs); bs };
         
         // TODO: This way we're storing state is not really right... We don't have a symmetric key yet.
@@ -352,18 +365,24 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
     }
 }
 
+
+
 #[cfg(test)]
 mod test{
     use rand::chacha::ChaChaRng;
     use rand::{Rng, SeedableRng};
-    use super::{Agent, AgentEnvironment};
+    use super::{Agent, AgentEnvironment, Task};
     use ip_address_port::IpAddressPort;
     use std::collections::HashMap;
-    
+    use identity::Identity;
+    use vm::{self, Vm};
+    use std::sync::mpsc::{channel, Sender, Receiver, TryRecvError};
+
     struct DummyEnvironment {
         rng: ChaChaRng,
         outgoing: Vec<(IpAddressPort, Vec<u8>)>,
         location: IpAddressPort,
+        tasks: Vec<Task>,
     }
     
     impl DummyEnvironment {
@@ -372,6 +391,7 @@ mod test{
                 rng: ChaChaRng::from_seed(&[seed]),
                 outgoing: Vec::new(),
                 location: location,
+                tasks: Vec::new(),
             }
         }
     }
@@ -389,6 +409,10 @@ mod test{
         
         fn send(&mut self, dest: &IpAddressPort, packet: &[u8]) {
             self.outgoing.push((*dest, packet.to_vec()))
+        }
+        
+        fn execute(&mut self, task: Task) {
+            self.tasks.push(task);
         }
     }
 
@@ -426,6 +450,12 @@ mod test{
         }
     }
     
+    fn drain_tasks(agents: &mut [&mut Agent<DummyEnvironment>]) {
+        for agent in agents.iter_mut() {
+            agent.environment.tasks.clear();
+        }
+    }
+    
     #[test]
     fn initiate() {
         let mut a = Agent::new(
@@ -444,11 +474,23 @@ mod test{
             exchange(&mut [&mut a, &mut b]);
         }
         
-        a.send_to(&b.identity, &[1,2,3,4]);
-        
-        exchange(&mut [&mut a, &mut b]);
-        
-        panic!("see");
+        for round in 0..1 {
+            let sample_send = [
+                0x11223344, 0x22334455 + round, 0x33445566
+            ];
+            a.send_to(&b.identity, &vm::words_to_le_bytes(&sample_send)[..]);//&[1,2,3,4]);
+            
+            assert!(b.environment.tasks.len()==0);
+            
+            exchange(&mut [&mut a, &mut b]);
+            
+            assert!(b.environment.tasks.len()==1);
+            assert_eq!(b.environment.tasks[0].requestor, a.identity);
+            assert_eq!(b.environment.tasks[0].vm.read_memory(1), 0x22334455 + round);
+            assert_eq!(b.environment.tasks[0].vm.read_memory(2), 0x33445566);
+            
+            drain_tasks(&mut [&mut a, &mut b]);
+        }
     }
 
 }

@@ -16,6 +16,7 @@ pub struct Vm {
     compute_cost: u64,
 }
 
+#[derive(Debug, Copy, Clone)]
 pub enum Fault {
     InvalidInstruction(u32),
     MemoryOutOfRange,
@@ -51,7 +52,7 @@ pub fn le_bytes_to_words(bytes: &[u8]) -> Vec<u32> {
     (0..word_count).map(|_| cursor.read_u32::<LittleEndian>().unwrap()).collect()
 }
 
-fn words_to_le_bytes(words: &[u32]) -> Vec<u8> {
+pub fn words_to_le_bytes(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len()*4);
     for word in words.iter() {
         bytes.push(((word>> 0) & 0xffu32) as u8);
