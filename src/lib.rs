@@ -5,6 +5,7 @@ pub mod ip_address_port;
 pub mod vm;
 
 mod content_packet;
+mod expected_packet_set;
 mod initiation_packet;
 mod stream;
 

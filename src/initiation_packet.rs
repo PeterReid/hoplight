@@ -58,10 +58,6 @@ pub struct InitiationPacketInner<'a> {
     pub public_key: &'a [u8; INNER_PUBLIC_KEY_LEN],
     pub timestamp: u64,
     pub signature: &'a [u8; INNER_SIGNATURE_LEN],
-    
-    /// The parts of the inner packet that are signed. This happens to be
-    /// all the bytes that precede the signature.
-    signed: &'a [u8; INNER_SIGNATURE_START],
 }
 
 impl<'a> InitiationPacketInner<'a> {
@@ -70,7 +66,6 @@ impl<'a> InitiationPacketInner<'a> {
             public_key: array_ref!(packet, INNER_PUBLIC_KEY_START, INNER_PUBLIC_KEY_LEN),
             timestamp: (&packet[INNER_TIMESTAMP_START..INNER_TIMESTAMP_END]).read_u64::<LittleEndian>().unwrap(),
             signature: array_ref!(packet, INNER_SIGNATURE_START, INNER_SIGNATURE_LEN),
-            signed: array_ref!(packet, 0, INNER_SIGNATURE_START),
         }
     }
 }
