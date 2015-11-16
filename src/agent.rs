@@ -394,19 +394,27 @@ mod test{
         }
         
         for round in 0..500 {
+            let skip = round%21 == 0;
+            
             let sample_send = [
                 0x11223344, 0x22334455 + round, 0x33445566
             ];
-            a.send_to(&b.identity, &vm::words_to_le_bytes(&sample_send)[..]).ok().expect("send_to failed");//&[1,2,3,4]);
+            if !skip {
+                a.send_to(&b.identity, &vm::words_to_le_bytes(&sample_send)[..]).ok().expect("send_to failed");//&[1,2,3,4]);
+            }
             
             assert!(b.environment.tasks.len()==0);
             
             exchange(&mut [&mut a, &mut b]);
             
-            assert!(b.environment.tasks.len()==1);
-            assert_eq!(b.environment.tasks[0].requestor, a.identity);
-            assert_eq!(b.environment.tasks[0].vm.read_memory(1), 0x22334455 + round);
-            assert_eq!(b.environment.tasks[0].vm.read_memory(2), 0x33445566);
+            if skip {
+                assert!(b.environment.tasks.len()==0);
+            } else {
+                assert!(b.environment.tasks.len()==1);
+                assert_eq!(b.environment.tasks[0].requestor, a.identity);
+                assert_eq!(b.environment.tasks[0].vm.read_memory(1), 0x22334455 + round);
+                assert_eq!(b.environment.tasks[0].vm.read_memory(2), 0x33445566);
+            }
             
             drain_tasks(&mut [&mut a, &mut b]);
         }
