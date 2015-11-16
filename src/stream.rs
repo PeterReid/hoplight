@@ -24,6 +24,9 @@ pub struct Stream{
     // This should be private once this structure has been thought through.
     pub outgoing_message_identifiers: [u64; 8],
     pub outgoing_message_index: u64,
+    
+    pub incoming_message_mask_start: u64,
+    pub incoming_message_mask: u64,
 }
 
 impl Stream {
@@ -35,9 +38,11 @@ impl Stream {
                 outgoing_message_identifiers: [0u64; 8],
                 outgoing_message_index: 0,
                 neighbor_is_lexico_later: neighbor_is_lexico_later,
+                incoming_message_mask_start: 0,
+                incoming_message_mask: 0xffff_ffff_ffff_ffff,
             };
             
-            let mut some_identifiers = [0u64; 8];
+            let mut some_identifiers = [0u64; 64];
             stream.generate_identifiers(Direction::Incoming, 0, &mut some_identifiers);
             for (idx, identifier) in some_identifiers.iter().enumerate() {
                 if idx==0 {
@@ -98,7 +103,6 @@ impl Stream {
             // Generate a new batch!
             let mut identifiers_temp = [0; 8];
             self.generate_identifiers(Direction::Outgoing, self.outgoing_message_index, &mut identifiers_temp);
-            println!("Generated outgoing identifier batch, starting with {}", identifiers_temp[0]);
             self.outgoing_message_identifiers = identifiers_temp;
         }
         
@@ -121,6 +125,56 @@ impl Stream {
             Err(HandleError::BadChecksum)
         }
     }
+    
+    
+    pub fn got_incoming_packet(
+        &mut self,
+        packet: &ExpectedPacket,
+        expected_packet_set: &mut ExpectedPacketSet
+    ){
+        if packet.packet_number < self.incoming_message_mask_start {
+            return;
+        }
+        
+        let bit_offset_in_mask = packet.packet_number - self.incoming_message_mask_start;
+        if bit_offset_in_mask > 64 {
+            // This is surprising... we did not generate this far ahead.
+            panic!("Received incoming packet that we did not mean to generate yet.");
+        }
+        
+        self.incoming_message_mask = self.incoming_message_mask & !(1u64 << bit_offset_in_mask);
+       
+        if self.incoming_message_mask & 0xff == 0 || (self.incoming_message_mask>>48) != 0xffff {
+            let mut incoming_identifiers = [0u64; 8];
+            self.generate_identifiers(Direction::Incoming, self.incoming_message_mask_start + 64, &mut incoming_identifiers[..]);
+            
+            for (idx, incoming_identifier) in incoming_identifiers.iter().enumerate() {
+                expected_packet_set.add(ExpectedPacket{
+                    stream_with: packet.stream_with,
+                    stream_key: self.key,
+                    packet_number: self.incoming_message_mask_start + 64 + (idx as u64),
+                }, *incoming_identifier);
+            }
+            
+            if self.incoming_message_mask != 0 {
+                // There were some packets that we expected to receive but did not. We'd better clear them
+                // out from the expected packet set.
+                let mut abandoned_incoming_identifiers = [0u64; 8];
+                self.generate_identifiers(Direction::Incoming, self.incoming_message_mask_start, &mut abandoned_incoming_identifiers[..]);
+                for (idx, abandoned_incoming_identifier) in abandoned_incoming_identifiers.iter().enumerate() {
+                    expected_packet_set.remove(&ExpectedPacket{
+                        stream_with: packet.stream_with,
+                        stream_key: self.key,
+                        packet_number: self.incoming_message_mask_start + (idx as u64),
+                    }, *abandoned_incoming_identifier);
+                }
+            }
+            
+            self.incoming_message_mask = (self.incoming_message_mask >> 8) | (0xff<<56);
+            self.incoming_message_mask_start += 8;
+        }
+    }
+
 }
 
 
@@ -232,4 +286,29 @@ impl StreamCluster {
         }
         return Err(HandleError::UnrecognizedPacket);
     }
+    
+    pub fn got_incoming_packet(
+        &mut self, 
+        packet: &ExpectedPacket, 
+        packet_identifier: u64,
+        upcoming: &mut ExpectedPacketSet
+    ) {
+        let mut streams = [
+            &mut self.own_current_neighbor_current,
+            &mut self.own_current_neighbor_previous,
+            &mut self.own_previous_neighbor_current,
+            &mut self.own_previous_neighbor_previous,
+        ];
+        
+        for stream in streams.iter_mut() {
+            if let Some(stream) = stream.as_mut() {
+                if stream.key == packet.stream_key {
+                    stream.got_incoming_packet(packet, upcoming)
+                }
+            }
+        }
+        
+        upcoming.remove(packet, packet_identifier);
+    }
 }
+

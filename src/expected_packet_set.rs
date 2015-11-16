@@ -46,7 +46,7 @@ impl ExpectedPacketSet {
             self.inner.remove(&identifier);
         }
     }
-    
+
     pub fn iter(&self, identifier: u64) -> ::std::slice::Iter<ExpectedPacket> {
         if let Some(list) = self.inner.get(&identifier) {
             list.iter()

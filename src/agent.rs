@@ -86,7 +86,7 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         if packet.len() >= CONTENTFUL_PACKET_THRESHOLD {
             match self.handle_contentful_packet(packet) {
                 _ => {
-                    println!("TODO");
+                    //println!("TODO");
                 }
             }
         } else {
@@ -95,7 +95,7 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
                     println!("handle_initiation_packet failed: {:?}", e);
                 }
                 _ => {
-                    println!("TODO");
+                    //println!("TODO");
                 }
             }
         }
@@ -105,6 +105,8 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         let parts = try!(ContentPacket::decode(packet));
         
         let mut found: Option<(ExpectedPacket, Vec<u8>)> = None;
+        
+        //let mut found_neighbor_state = None;
         
         for expected_packet in self.upcoming_packets.iter(parts.packet_identifier) {
             let neighbor_state = if let Some(neighbor_state) = self.neighbors.get_mut(&expected_packet.stream_with) {
@@ -117,6 +119,7 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
             
             if let Ok(payload) = neighbor_state.streams.decrypt_incoming_payload(&expected_packet.stream_key, expected_packet.packet_number, parts.encrypted_payload, parts.checksum) {
                 found = Some( (*expected_packet, payload) );
+                //found_neighbor_state = Some(neighbor_state);
                 break;
             }
         }
@@ -125,7 +128,11 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
             if let Some(found) = found { found } 
             else { return Err(HandleError::UnrecognizedPacket) };
         
-        self.upcoming_packets.remove(&expected_packet, parts.packet_identifier);
+        // We just want to hoist that variable out of the loop in there, but the borrow checker won't let us.
+        let neighbor_state = self.neighbors.get_mut(&expected_packet.stream_with).unwrap();
+        
+        neighbor_state.streams.got_incoming_packet(&expected_packet, parts.packet_identifier, &mut self.upcoming_packets);
+        //self.upcoming_packets.remove(&expected_packet, parts.packet_identifier);
         
         // TODO: Maybe put some new things into upcoming_packets for farther-in-the-future packets.
         
@@ -386,7 +393,7 @@ mod test{
             exchange(&mut [&mut a, &mut b]);
         }
         
-        for round in 0..6 {
+        for round in 0..500 {
             let sample_send = [
                 0x11223344, 0x22334455 + round, 0x33445566
             ];
@@ -403,6 +410,7 @@ mod test{
             
             drain_tasks(&mut [&mut a, &mut b]);
         }
+        
     }
 
 }
