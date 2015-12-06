@@ -134,8 +134,6 @@ impl<E:AgentEnvironment+Rng> Agent<E> {
         neighbor_state.streams.got_incoming_packet(&expected_packet, parts.packet_identifier, &mut self.upcoming_packets);
         //self.upcoming_packets.remove(&expected_packet, parts.packet_identifier);
         
-        // TODO: Maybe put some new things into upcoming_packets for farther-in-the-future packets.
-        
         let payload_words = vm::le_bytes_to_words(&payload);
         
         let vm = try!(Vm::new(&payload_words).map_err(|e| 
