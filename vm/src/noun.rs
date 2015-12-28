@@ -1,6 +1,7 @@
 use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
 use std::ops::Deref;
+use eval::{EvalError, EvalResult};
 
 #[derive(Clone, Debug)]
 pub enum Noun {
@@ -23,15 +24,6 @@ impl PartialEq for Noun {
 }
 impl Eq for Noun {}
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum EvalError {
-    Something,
-    CellAsIndex,
-    IndexOutOfRange,
-    BadOpcode(u8),
-}
-
-pub type EvalResult<T> = Result<T, EvalError>;
 
 
 impl Noun {
@@ -39,15 +31,15 @@ impl Noun {
         Noun::Cell(Rc::new(left), Rc::new(right))
     }
     
-    fn from_bool(source: bool) -> Noun {
+    pub fn from_bool(source: bool) -> Noun {
         Noun::ByteAtom(if source { 0 } else { 1 })
     }
     
-    fn equal(&self, other: &Noun) -> Noun {
+    pub fn equal(&self, other: &Noun) -> Noun {
         Noun::from_bool(self == other)
     }
     
-    fn as_byte(&self) -> Option<u8> {
+    pub fn as_byte(&self) -> Option<u8> {
         match self {
             &Noun::ByteAtom(x) => { Some(x) }
             &Noun::Atom(ref xs) => {
@@ -63,7 +55,7 @@ impl Noun {
         }
     }
     
-    fn axis(&self, index: &Noun) -> EvalResult<Noun> {
+    pub fn axis(&self, index: &Noun) -> EvalResult {
         // LSB first
         match index {
             &Noun::ByteAtom(x) => self.axis_byte(x),
@@ -72,7 +64,7 @@ impl Noun {
         }
     }
     
-    fn axis_bytes(&self, index: &[u8]) -> EvalResult<Noun> {
+    fn axis_bytes(&self, index: &[u8]) -> EvalResult {
         // Find the most significant bit
         let last_nonzero_position = match index.iter().rposition(|b| *b != 0) {
             None => { return Err(EvalError::IndexOutOfRange)}
@@ -93,7 +85,7 @@ impl Noun {
         trace.axis_byte(index[last_nonzero_position])
     }
     
-    fn axis_byte(&self, mut index: u8) -> EvalResult<Noun> {
+    fn axis_byte(&self, mut index: u8) -> EvalResult {
         if index == 0 {
             return Err(EvalError::IndexOutOfRange);
         }
@@ -125,25 +117,6 @@ impl Noun {
         Ok(trace.clone())
     }
     
-    pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> Result<Noun, EvalError> {
-        println!("Evaluating opcode {}", opcode);
-        match opcode {
-            0 => subject.axis(argument),
-            1 => Ok(argument.clone()),
-            _ => Err(EvalError::BadOpcode(opcode)),
-        }
-    }
-    
-    pub fn eval(&self) -> Result<Noun, EvalError> {
-        if let &Noun::Cell(ref subject, ref formula) = self {
-            if let &Noun::Cell(ref operator, ref argument) = formula.deref() {
-                if let Some(opcode) = operator.as_byte() {
-                    return Noun::eval_on(subject, opcode, argument);
-                }
-            }
-        }
-        Err(EvalError::Something)
-    }
 }
 
 #[cfg(test)]
@@ -154,37 +127,5 @@ mod test {
     #[test]
     fn eq() {
         assert_eq!((1, 2).as_noun(), (1, 2).as_noun());
-    }
-
-    fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) {
-        assert_eq!(
-            expression.as_noun().eval(),
-            Ok( result.as_noun() )
-        );
-    }
-
-    #[test]
-    fn literal_op() {
-        expect_eval((0, 1, 44), 44);
-        
-        expect_eval(
-            ((76, 30), 1, (42, 60)), 
-            (42, 60)
-        );
-    }
-
-
-    #[test]
-    fn axis_op() {
-        expect_eval((99, 0, 1), 99);
-        expect_eval(((98, 99), 0, 2), 98);
-        expect_eval(((98, 99), 0, 3), 99);
-        
-        expect_eval(((1, 2, 3, 4, (5, 6, 7, (8, 9, 10, 11))), 0, &[0xff, 0x07][..]),
-            11);
-        expect_eval(((((1, 2), 3), 4), 0, 5),
-            3);
-        expect_eval(((((1, 2), 3), 4), 0, 4),
-            (1, 2));
     }
 }
