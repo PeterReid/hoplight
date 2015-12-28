@@ -1,5 +1,6 @@
 use noun::Noun;
 use std::ops::Deref;
+use axis::Axis;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {

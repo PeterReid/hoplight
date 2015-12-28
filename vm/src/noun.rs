@@ -1,7 +1,5 @@
 use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
-use std::ops::Deref;
-use eval::{EvalError, EvalResult};
 
 #[derive(Clone, Debug)]
 pub enum Noun {
@@ -54,69 +52,6 @@ impl Noun {
             }
         }
     }
-    
-    pub fn axis(&self, index: &Noun) -> EvalResult {
-        // LSB first
-        match index {
-            &Noun::ByteAtom(x) => self.axis_byte(x),
-            &Noun::Atom(ref x) => self.axis_bytes(&x),
-            &Noun::Cell(_, _) => Err(EvalError::CellAsIndex),
-        }
-    }
-    
-    fn axis_bytes(&self, index: &[u8]) -> EvalResult {
-        // Find the most significant bit
-        let last_nonzero_position = match index.iter().rposition(|b| *b != 0) {
-            None => { return Err(EvalError::IndexOutOfRange)}
-            Some(pos) => pos
-        };
-        
-        let mut trace: &Noun = self;
-        for byte in index[..last_nonzero_position].iter() {
-            for bit in 0..8 {
-                let go_right = ((*byte) & (1<<bit)) != 0;
-                trace = match trace {
-                    &Noun::Cell(ref x, ref y) => if go_right { y.deref() } else { x.deref() },
-                    _ => { return Err(EvalError::IndexOutOfRange) }
-                };
-            }
-        }
-        
-        trace.axis_byte(index[last_nonzero_position])
-    }
-    
-    fn axis_byte(&self, mut index: u8) -> EvalResult {
-        if index == 0 {
-            return Err(EvalError::IndexOutOfRange);
-        }
-        
-        println!("Looking for index {}", index);
-        let mut trace = self;
-        
-        let mut index: u16 = ((index as u16) << 1) | 1;
-        
-        println!("With a trailing 1, index = {}", index);
-        while (index & 0x0100) == 0 {
-            index = index << 1;
-        }
-        
-        // Shift out the most significant bit, which has told us which bit position the
-        // path starts at but is not part of the path itself.
-        index = index << 1; 
-        
-        while (index & 0x1ff) != 0x0100 {
-            let go_right = (index & 0x100) != 0;
-            println!("go_right = {}", go_right);
-            trace = match trace {
-                &Noun::Cell(ref x, ref y) => if go_right { y.deref() } else { x.deref() },
-                _ => { return Err(EvalError::IndexOutOfRange) }
-            };
-            index = index << 1;
-        }
-        
-        Ok(trace.clone())
-    }
-    
 }
 
 #[cfg(test)]
