@@ -5,6 +5,12 @@ pub trait AsNoun {
     fn as_noun(self) -> Noun;
 }
 
+impl AsNoun for Noun {
+    fn as_noun(self) -> Noun {
+        self
+    }
+}
+
 impl AsNoun for u8 {
     fn as_noun(self) -> Noun {
         Noun::ByteAtom(self)
