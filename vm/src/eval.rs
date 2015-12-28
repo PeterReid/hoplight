@@ -27,6 +27,13 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
                 Err(EvalError::BadRecurseArgument)
             }
         }
+        3 => { // cell test
+            Ok(Noun::from_bool(if let Noun::Cell(_, _) = try!(eval_pair(subject, argument)) {
+                true
+            } else {
+                false
+            }))
+        }
         5 => {
             if let Noun::Cell(ref lhs, ref rhs) = try!(eval_pair(subject, argument)) {
                 Ok(lhs.equal(rhs))
@@ -100,5 +107,11 @@ mod test {
     fn equal_op() {
         expect_eval(((5, 5), 5, (0, 1)),  Noun::from_bool(true));
         expect_eval(((5, 8), 5, (0, 1)),  Noun::from_bool(false));
+    }
+    
+    #[test]
+    fn cell_op() {
+        expect_eval(((99, 33), 3, (0, 1)),  Noun::from_bool(true));
+        expect_eval((99, 3, (0, 1)),  Noun::from_bool(false));
     }
 }
