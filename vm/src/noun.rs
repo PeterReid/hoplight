@@ -8,6 +8,11 @@ pub enum Noun {
     Cell(Rc<Noun>, Rc<Noun>),
 }
 
+pub enum NounKind<'a> {
+    Cell(&'a Noun, &'a Noun),
+    Atom(&'a [u8]),
+}
+
 impl PartialEq for Noun {
     fn eq(&self, other: &Noun) -> bool {
         match (self, other) {
@@ -35,6 +40,35 @@ impl Noun {
     
     pub fn equal(&self, other: &Noun) -> Noun {
         Noun::from_bool(self == other)
+    }
+    
+    pub fn from_usize_compact(mut source: usize) -> Noun {
+        let mut bs = Vec::new();
+        while source != 0 {
+            bs.push((source & 0xff) as u8);
+            source = source >> 8;
+        }
+        Noun::from_vec(bs)
+    }
+    
+    pub fn from_vec(source: Vec<u8>) -> Noun {
+        Noun::Atom(Rc::new(source))
+    }
+    
+    pub fn as_kind<'a>(&'a self, buf: &'a mut [u8; 4]) -> NounKind<'a> {
+        match self {
+            &Noun::ByteAtom(x) => {
+                buf[0] = x;
+                NounKind::Atom(&buf[0..1])
+            }
+            &Noun::Atom(ref xs) => {
+                //let ys: &'a Rc<Vec<u8>> = xs;
+                NounKind::Atom(&xs)
+            }
+            &Noun::Cell(ref a, ref b) => {
+                NounKind::Cell(a, b)
+            }
+        }
     }
     
     pub fn as_byte(&self) -> Option<u8> {
