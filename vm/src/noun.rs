@@ -38,6 +38,10 @@ impl Noun {
         Noun::ByteAtom(if source { 0 } else { 1 })
     }
     
+    pub fn from_u8(source: u8) -> Noun {
+        Noun::ByteAtom(source)
+    }
+    
     pub fn equal(&self, other: &Noun) -> Noun {
         Noun::from_bool(self == other)
     }
@@ -51,8 +55,35 @@ impl Noun {
         Noun::from_vec(bs)
     }
     
+    pub fn as_usize(&self) -> Option<usize> {
+        match self {
+            &Noun::Cell(_, _) => None,
+            &Noun::ByteAtom(x) => Some(x as usize),
+            &Noun::Atom(ref xs) => {
+                let mut shift = 0u8;
+                let mut accum: usize = 0;
+                let mut overflow_tester: usize = 0xff;
+                for b in xs.iter().map(|b| *b) {
+                    if b != 0 {
+                        if overflow_tester == 0 {
+                            return None; // too big to be a usize
+                        }
+                        accum = accum | ((b as usize) << shift);
+                    }
+                    shift += 8;
+                    overflow_tester = overflow_tester << 8;
+                }
+                Some(accum)
+            }
+        }
+    }
+    
     pub fn from_vec(source: Vec<u8>) -> Noun {
         Noun::Atom(Rc::new(source))
+    }
+    
+    pub fn from_slice(source: &[u8]) -> Noun {
+        Noun::from_vec(source.to_vec())
     }
     
     pub fn as_kind<'a>(&'a self, buf: &'a mut [u8; 4]) -> NounKind<'a> {
