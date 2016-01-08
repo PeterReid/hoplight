@@ -1,5 +1,4 @@
 use noun::{Noun};
-use std::ops::Deref;
 use axis::Axis;
 use math;
 
@@ -47,7 +46,7 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
 }
 
 pub fn eval_pair(subject: &Noun, formula: &Noun) -> EvalResult {
-    if let &Noun::Cell(ref operator, ref argument) = formula.deref() {
+    if let Some((operator, argument)) = formula.as_cell() {
         if let Some(opcode) = operator.as_byte() {
             return eval_on(subject, opcode, argument);
         } else if operator.is_cell() { // distribute
@@ -61,7 +60,7 @@ pub fn eval_pair(subject: &Noun, formula: &Noun) -> EvalResult {
 }
 
 pub fn eval(expression: &Noun) -> EvalResult {
-    if let &Noun::Cell(ref subject, ref formula) = expression {
+    if let Some((subject, formula)) = expression.as_cell() {
         return eval_pair(subject, formula);
     }
     Err(EvalError::Something)
