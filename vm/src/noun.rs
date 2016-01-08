@@ -114,6 +114,13 @@ impl Noun {
         }
     }
     
+    pub fn is_cell(&self) -> bool {
+        match self {
+            &Noun::Cell(_, _) => true,
+            _ => false
+        }
+    }
+
     pub fn as_byte(&self) -> Option<u8> {
         match self {
             &Noun::SmallAtom{value, length: _} => {

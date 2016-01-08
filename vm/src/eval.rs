@@ -1,6 +1,7 @@
-use noun::Noun;
+use noun::{Noun};
 use std::ops::Deref;
 use axis::Axis;
+use math;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -10,6 +11,7 @@ pub enum EvalError {
     BadOpcode(u8),
     BadRecurseArgument,
     BadEqualsArgument,
+    BadArgument,
 }
 
 pub type EvalResult = Result<Noun, EvalError>;
@@ -34,6 +36,9 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
                 false
             }))
         }
+        4 => { // increment
+            math::natural_add(&try!(eval_pair(subject, argument)), &Noun::from_u8(1))
+        }
         5 => {
             if let Noun::Cell(ref lhs, ref rhs) = try!(eval_pair(subject, argument)) {
                 Ok(lhs.equal(rhs))
@@ -49,6 +54,11 @@ pub fn eval_pair(subject: &Noun, formula: &Noun) -> EvalResult {
     if let &Noun::Cell(ref operator, ref argument) = formula.deref() {
         if let Some(opcode) = operator.as_byte() {
             return eval_on(subject, opcode, argument);
+        } else if operator.is_cell() { // distribute
+            return Ok(Noun::new_cell(
+                try!(eval_pair(subject, operator)),
+                try!(eval_pair(subject, argument)),
+            ));
         }
     }
     Err(EvalError::Something)
@@ -113,5 +123,19 @@ mod test {
     fn cell_op() {
         expect_eval(((99, 33), 3, (0, 1)),  Noun::from_bool(true));
         expect_eval((99, 3, (0, 1)),  Noun::from_bool(false));
+    }
+
+    #[test]
+    fn increment_op() {
+        expect_eval((22, 4, (0, 1)),  Noun::from_u8(23));
+        expect_eval((0xff, 4, (0, 1)),  Noun::from_vec(vec![0x00, 0x01]));
+    }
+
+    #[test]
+    fn distribute() {
+        expect_eval(
+            (22, (4, (0, 1)), (0, 1), (1, 50)),
+            (23, 22, 50).as_noun()
+        );
     }
 }
