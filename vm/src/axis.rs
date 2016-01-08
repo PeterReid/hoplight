@@ -1,4 +1,4 @@
-use noun::Noun;
+use noun::{Noun, NounKind};
 use eval::{EvalError, EvalResult};
 use std::ops::Deref;
 
@@ -103,10 +103,14 @@ fn axis_for<T: Iterator<Item=bool>>(subject: &Noun, mut bits: T) -> EvalResult {
 
 impl Axis for Noun {
     fn axis(&self, index: &Noun) -> EvalResult {
-        match index {
-            &Noun::ByteAtom(x) => axis_for(self, ByteBitIterator::new(x)),
-            &Noun::Atom(ref xs) => axis_for(self, ByteSliceBitIterator::new(xs)),
-            &Noun::Cell(_, _) => Err(EvalError::CellAsIndex),
+        let mut buf = [0u8; 4];
+        match index.as_kind(&mut buf) {
+            NounKind::Atom(xs) => {
+                axis_for(self, ByteSliceBitIterator::new(xs))
+            }
+            NounKind::Cell(_, _) => {
+                Err(EvalError::CellAsIndex)
+            }
         }
     }
 }

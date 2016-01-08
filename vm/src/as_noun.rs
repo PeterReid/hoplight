@@ -13,7 +13,7 @@ impl AsNoun for Noun {
 
 impl AsNoun for u8 {
     fn as_noun(self) -> Noun {
-        Noun::ByteAtom(self)
+        Noun::from_u8(self)
     }
 }
 

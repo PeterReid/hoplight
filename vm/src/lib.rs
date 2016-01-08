@@ -1,3 +1,5 @@
+extern crate checked_int_cast;
+
 pub mod axis;
 pub mod eval;
 pub mod noun;

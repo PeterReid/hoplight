@@ -1,9 +1,10 @@
 use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
+use checked_int_cast::CheckedIntCast;
 
 #[derive(Clone, Debug)]
 pub enum Noun {
-    ByteAtom(u8),
+    SmallAtom{value: u32, length: u8},
     Atom(Rc<Vec<u8>>),
     Cell(Rc<Noun>, Rc<Noun>),
 }
@@ -13,14 +14,21 @@ pub enum NounKind<'a> {
     Atom(&'a [u8]),
 }
 
+fn as_truncated_u32(bs: &[u8]) -> u32 {
+    (bs.get(0).map(|x| *x).unwrap_or(0) as u32)
+    | ((bs.get(1).map(|x| *x).unwrap_or(0) as u32) << 8)
+    | ((bs.get(2).map(|x| *x).unwrap_or(0) as u32) << 16)
+    | ((bs.get(3).map(|x| *x).unwrap_or(0) as u32) << 24)
+}
+
 impl PartialEq for Noun {
     fn eq(&self, other: &Noun) -> bool {
         match (self, other) {
             (&Noun::Cell(ref a, ref b), &Noun::Cell(ref x, ref y)) => a==x && b==y,
-            (&Noun::ByteAtom(a), &Noun::ByteAtom(x)) => a==x,
+            (&Noun::SmallAtom{value:value_a, length:length_a}, &Noun::SmallAtom{value:value_b, length:length_b}) => (value_a,length_a)==(value_b,length_b),
             (&Noun::Atom(ref a), &Noun::Atom(ref x)) => a==x,
-            (&Noun::ByteAtom(a), &Noun::Atom(ref x)) => x.len()==1 && a == x[0],
-            (&Noun::Atom(ref a), &Noun::ByteAtom(x)) => a.len()==1 && a[0] == x,
+            (&Noun::SmallAtom{value:value_a, length:length_a}, &Noun::Atom(ref b)) => b.len()==(length_a as usize) && as_truncated_u32(b) == value_a,
+            (&Noun::Atom(ref a), &Noun::SmallAtom{value:value_b, length:length_b}) => a.len()==(length_b as usize) && as_truncated_u32(a) == value_b,
             _ => false
         }
     }
@@ -35,11 +43,11 @@ impl Noun {
     }
     
     pub fn from_bool(source: bool) -> Noun {
-        Noun::ByteAtom(if source { 0 } else { 1 })
+        Noun::from_u8(if source { 0 } else { 1 })
     }
     
     pub fn from_u8(source: u8) -> Noun {
-        Noun::ByteAtom(source)
+        Noun::SmallAtom{value: source as u32, length: 1}
     }
     
     pub fn equal(&self, other: &Noun) -> Noun {
@@ -58,7 +66,7 @@ impl Noun {
     pub fn as_usize(&self) -> Option<usize> {
         match self {
             &Noun::Cell(_, _) => None,
-            &Noun::ByteAtom(x) => Some(x as usize),
+            &Noun::SmallAtom{value, length: _} => value.as_usize_checked(),
             &Noun::Atom(ref xs) => {
                 let mut shift = 0u8;
                 let mut accum: usize = 0;
@@ -88,9 +96,13 @@ impl Noun {
     
     pub fn as_kind<'a>(&'a self, buf: &'a mut [u8; 4]) -> NounKind<'a> {
         match self {
-            &Noun::ByteAtom(x) => {
-                buf[0] = x;
-                NounKind::Atom(&buf[0..1])
+            &Noun::SmallAtom{value, length} => {
+                // TODO: Use byteorder
+                buf[0] = value as u8;
+                buf[1] = (value>>8) as u8;
+                buf[2] = (value>>16) as u8;
+                buf[3] = (value>>24) as u8;
+                NounKind::Atom(&buf[0..length as usize])
             }
             &Noun::Atom(ref xs) => {
                 //let ys: &'a Rc<Vec<u8>> = xs;
@@ -104,7 +116,13 @@ impl Noun {
     
     pub fn as_byte(&self) -> Option<u8> {
         match self {
-            &Noun::ByteAtom(x) => { Some(x) }
+            &Noun::SmallAtom{value, length: _} => {
+                if value<256 {
+                    Some(value as u8)
+                } else {
+                    None
+                }
+            }
             &Noun::Atom(ref xs) => {
                 if (&xs[1..]).iter().position(|x| *x!=0).is_some() {
                     return None;
