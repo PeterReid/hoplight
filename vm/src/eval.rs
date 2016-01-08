@@ -21,7 +21,7 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
         0 => subject.axis(argument),
         1 => Ok(argument.clone()),
         2 => {
-            if let &Noun::Cell(ref b, ref c) = argument {
+            if let Some((b, c)) = argument.as_cell() {
                 let b_result = try!(eval_pair(subject, b));
                 let c_result = try!(eval_pair(subject, c));
                 eval_pair(&b_result, &c_result)
@@ -36,7 +36,7 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
             math::natural_add(&try!(eval_pair(subject, argument)), &Noun::from_u8(1))
         }
         5 => {
-            if let Noun::Cell(ref lhs, ref rhs) = try!(eval_pair(subject, argument)) {
+            if let Some((lhs, rhs)) = try!(eval_pair(subject, argument)).as_cell() {
                 Ok(lhs.equal(rhs))
             } else {
                 Err(EvalError::BadEqualsArgument)

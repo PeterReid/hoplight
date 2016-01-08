@@ -121,6 +121,13 @@ impl Noun {
         }
     }
 
+    pub fn as_cell(&self) -> Option<(&Noun, &Noun)> {
+        match self {
+            &Noun::Cell(ref a, ref b) => Some((a, b)),
+            _ => None
+        }
+    }
+
     pub fn as_byte(&self) -> Option<u8> {
         match self {
             &Noun::SmallAtom{value, length: _} => {
