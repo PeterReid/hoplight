@@ -14,22 +14,13 @@ pub enum NounKind<'a> {
     Atom(&'a [u8]),
 }
 
-fn as_truncated_u32(bs: &[u8]) -> u32 {
-    (bs.get(0).map(|x| *x).unwrap_or(0) as u32)
-    | ((bs.get(1).map(|x| *x).unwrap_or(0) as u32) << 8)
-    | ((bs.get(2).map(|x| *x).unwrap_or(0) as u32) << 16)
-    | ((bs.get(3).map(|x| *x).unwrap_or(0) as u32) << 24)
-}
-
 impl PartialEq for Noun {
     fn eq(&self, other: &Noun) -> bool {
         match (self, other) {
             (&Noun::Cell(ref a, ref b), &Noun::Cell(ref x, ref y)) => a==x && b==y,
             (&Noun::SmallAtom{value:value_a, length:length_a}, &Noun::SmallAtom{value:value_b, length:length_b}) => (value_a,length_a)==(value_b,length_b),
             (&Noun::Atom(ref a), &Noun::Atom(ref x)) => a==x,
-            (&Noun::SmallAtom{value:value_a, length:length_a}, &Noun::Atom(ref b)) => b.len()==(length_a as usize) && as_truncated_u32(b) == value_a,
-            (&Noun::Atom(ref a), &Noun::SmallAtom{value:value_b, length:length_b}) => a.len()==(length_b as usize) && as_truncated_u32(a) == value_b,
-            _ => false
+            _ => false // Nouns that can be SmallAtoms will be SmallAtoms. Doing otherwise would complicate constant-time guarantees.
         }
     }
 }
@@ -86,12 +77,30 @@ impl Noun {
         }
     }
     
-    pub fn from_vec(source: Vec<u8>) -> Noun {
-        Noun::Atom(Rc::new(source))
+    fn from_small_slice(source: &[u8]) -> Noun {
+        Noun::SmallAtom{
+            length: source.len() as u8,
+            value: (source.get(0).map(|x| *x).unwrap_or(0) as u32)
+                | ((source.get(1).map(|x| *x).unwrap_or(0) as u32) << 8)
+                | ((source.get(2).map(|x| *x).unwrap_or(0) as u32) << 16)
+                | ((source.get(3).map(|x| *x).unwrap_or(0) as u32) << 24)
+        }
     }
     
+    pub fn from_vec(source: Vec<u8>) -> Noun {
+        if source.len() <= 4 {
+            Noun::from_small_slice(&source)
+        } else {
+            Noun::Atom(Rc::new(source))
+        }
+    }
+
     pub fn from_slice(source: &[u8]) -> Noun {
-        Noun::from_vec(source.to_vec())
+        if source.len() <= 4 {
+            Noun::from_small_slice(source)
+        } else {
+            Noun::from_vec(source.to_vec())
+        }
     }
     
     pub fn as_kind<'a>(&'a self, buf: &'a mut [u8; 4]) -> NounKind<'a> {

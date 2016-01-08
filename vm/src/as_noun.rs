@@ -1,5 +1,4 @@
 use noun::Noun;
-use std::rc::Rc;
 
 pub trait AsNoun {
     fn as_noun(self) -> Noun;
@@ -19,7 +18,7 @@ impl AsNoun for u8 {
 
 impl<'a> AsNoun for &'a [u8] {
     fn as_noun(self) -> Noun {
-        Noun::Atom(Rc::new(self.to_vec()))
+        Noun::from_slice(self)
     }
 }
 
