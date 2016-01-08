@@ -30,11 +30,7 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
             }
         }
         3 => { // cell test
-            Ok(Noun::from_bool(if let Noun::Cell(_, _) = try!(eval_pair(subject, argument)) {
-                true
-            } else {
-                false
-            }))
+            Ok(Noun::from_bool(try!(eval_pair(subject, argument)).is_cell()))
         }
         4 => { // increment
             math::natural_add(&try!(eval_pair(subject, argument)), &Noun::from_u8(1))
