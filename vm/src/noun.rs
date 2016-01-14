@@ -77,6 +77,24 @@ impl Noun {
         }
     }
     
+    pub fn as_u8(&self) -> Option<u8> {
+        match self {
+            &Noun::Cell(_, _) => None,
+            &Noun::SmallAtom{value, length:_} => value.as_u8_checked(),
+            &Noun::Atom(ref xs) => {
+                if xs.len() > 1 {
+                    for x in &xs[1..] {
+                        if *x != 0 {
+                            return None;
+                        }
+                    }
+                }
+
+                xs.get(0).map(|x| *x)
+            }
+        }
+    }
+
     fn from_small_slice(source: &[u8]) -> Noun {
         Noun::SmallAtom{
             length: source.len() as u8,

@@ -11,6 +11,16 @@ pub enum EvalError {
     BadRecurseArgument,
     BadEqualsArgument,
     BadArgument,
+    BadIfCondition,
+}
+
+fn as_triple(noun: &Noun) -> Option<(&Noun, &Noun, &Noun)> {
+    if let Some((a, bc)) = noun.as_cell() {
+        if let Some((b, c)) = bc.as_cell() {
+            return Some((a, b, c));
+        }
+    }
+    None
 }
 
 pub type EvalResult = Result<Noun, EvalError>;
@@ -39,6 +49,31 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
                 Ok(lhs.equal(rhs))
             } else {
                 Err(EvalError::BadEqualsArgument)
+            }
+        }
+        6 => {
+            if let Some((b, c, d)) = as_triple(argument) {
+                let condition = try!(eval_pair(subject, b));
+                match condition.as_u8() {
+                    Some(0) => {
+                        eval_pair(subject, c)
+                    }
+                    Some(1) => {
+                        eval_pair(subject, d)
+                    }
+                    _ => {
+                        Err(EvalError::BadIfCondition)
+                    }
+                }
+            } else {
+                Err(EvalError::BadArgument)
+            }
+        }
+        7 => {
+            if let Some((b, c)) = argument.as_cell() {
+                eval_pair(&try!(eval_pair(subject, b)), c)
+            } else {
+                Err(EvalError::BadArgument)
             }
         }
         _ => Err(EvalError::BadOpcode(opcode)),
@@ -132,5 +167,26 @@ mod test {
             (22, (4, (0, 1)), (0, 1), (1, 50)),
             (23, 22, 50).as_noun()
         );
+    }
+
+    #[test]
+    fn if_true() {
+        expect_eval(
+            (42, (6, (1, 0), (4, 0, 1), (1, 233))),
+            43);
+    }
+
+    #[test]
+    fn if_false() {
+        expect_eval(
+            (42, (6, (1, 1), (4, 0, 1), (1, 233))),
+            233);
+    }
+
+    #[test]
+    fn composition() {
+        expect_eval(
+            (42, (7, (4, 0, 1), (4, 0, 1))),
+            44);
     }
 }
