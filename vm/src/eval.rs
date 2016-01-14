@@ -84,6 +84,15 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
                 Err(EvalError::BadArgument)
             }
         }
+        9 => {
+            if let Some((b, c)) = argument.as_cell() {
+                let core = try!(eval_pair(subject, c));
+                let formula = try!(core.axis(b));
+                eval_pair(&core, &formula)
+            } else {
+                Err(EvalError::BadArgument)
+            }
+        }
         _ => Err(EvalError::BadOpcode(opcode)),
     }
 }
@@ -210,5 +219,12 @@ mod test {
         expect_eval(
             (42, (8, (4, 0, 1), (4, 0, 3))),
             43);
+    }
+
+    #[test]
+    fn decrement() {
+        expect_eval(
+            (42, (8, (1, 0), 8, (1, 6, (5, (0, 7), 4, 0, 6), (0, 6), (9, 2, (0, 2), (4, 0, 6), 0, 7)), (9, 2, 0, 1))),
+            41);
     }
 }
