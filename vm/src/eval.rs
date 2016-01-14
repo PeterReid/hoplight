@@ -76,6 +76,14 @@ pub fn eval_on(subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
                 Err(EvalError::BadArgument)
             }
         }
+        8 => {
+            if let Some((b, c)) = argument.as_cell() {
+                let subject_prime = try!(eval_pair(subject, b));
+                eval_pair(&Noun::new_cell(subject_prime, subject.clone()), c)
+            } else {
+                Err(EvalError::BadArgument)
+            }
+        }
         _ => Err(EvalError::BadOpcode(opcode)),
     }
 }
@@ -188,5 +196,19 @@ mod test {
         expect_eval(
             (42, (7, (4, 0, 1), (4, 0, 1))),
             44);
+    }
+
+    #[test]
+    fn push_1() {
+        expect_eval(
+            (42, (8, (4, 0, 1), (0, 1))),
+            (43, 42));
+    }
+
+    #[test]
+    fn push_2() {
+        expect_eval(
+            (42, (8, (4, 0, 1), (4, 0, 3))),
+            43);
     }
 }
