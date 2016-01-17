@@ -35,7 +35,7 @@ struct Computation {
 
 impl Computation {
     pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
-        'eval_loop: loop {
+        'tail_recurse: loop {
             self.ticks_used += 1;
             if self.ticks_used >= self.tick_cap {
                 return Err(EvalError::TickLimitExceeded);
@@ -60,7 +60,7 @@ impl Computation {
                         let c_result = try!(self.eval_on(subject, c));
                         subject = b_result;
                         formula = c_result;
-                        continue 'eval_loop;
+                        continue 'tail_recurse;
                     } else {
                         Err(EvalError::BadRecurseArgument)
                     }
@@ -101,7 +101,7 @@ impl Computation {
                         let b_of_x = try!(self.eval_on(subject, b));
                         subject = b_of_x;
                         formula = c;
-                        continue 'eval_loop;
+                        continue 'tail_recurse;
                     } else {
                         Err(EvalError::BadArgument)
                     }
@@ -111,7 +111,7 @@ impl Computation {
                         let subject_prime = try!(self.eval_on(subject.clone(), b));
                         subject = Noun::new_cell(subject_prime, subject);
                         formula = c;
-                        continue 'eval_loop;
+                        continue 'tail_recurse;
                     } else {
                         Err(EvalError::BadArgument)
                     }
@@ -122,7 +122,7 @@ impl Computation {
                         let inner_formula = try!(core.axis(&b));
                         subject = core;
                         formula = inner_formula;
-                        continue 'eval_loop;
+                        continue 'tail_recurse;
                     } else {
                         Err(EvalError::BadArgument)
                     }
