@@ -34,91 +34,101 @@ struct Computation {
 }
 
 impl Computation {
-    pub fn eval_on(&mut self, subject: Noun, formula: Noun) -> EvalResult {
-        self.ticks_used += 1;
-        if self.ticks_used >= self.tick_cap {
-            return Err(EvalError::TickLimitExceeded);
-        }
+    pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
+        'eval_loop: loop {
+            self.ticks_used += 1;
+            if self.ticks_used >= self.tick_cap {
+                return Err(EvalError::TickLimitExceeded);
+            }
 
-        let (opcode_noun, argument) = try!(formula.into_cell().ok_or(EvalError::AtomicFormula));
-        if opcode_noun.is_cell() {
-            // Distribute. The opcode and argument are actually both formulas.
-            let lhs = try!(self.eval_on(subject.clone(), opcode_noun));
-            let rhs = try!(self.eval_on(subject, argument));
-            return Ok(Noun::new_cell(lhs, rhs));
-        }
+            let (opcode_noun, argument) = try!(formula.into_cell().ok_or(EvalError::AtomicFormula));
+            if opcode_noun.is_cell() {
+                // Distribute. The opcode and argument are actually both formulas.
+                let lhs = try!(self.eval_on(subject.clone(), opcode_noun));
+                let rhs = try!(self.eval_on(subject, argument));
+                return Ok(Noun::new_cell(lhs, rhs));
+            }
 
-        let opcode = try!(opcode_noun.as_u8().ok_or(EvalError::NotAnOpcode));
+            let opcode = try!(opcode_noun.as_u8().ok_or(EvalError::NotAnOpcode));
 
-        match opcode {
-            0 => subject.axis(&argument),
-            1 => Ok(argument),
-            2 => {
-                if let Some((b, c)) = argument.into_cell() {
-                    let b_result = try!(self.eval_on(subject.clone(), b));
-                    let c_result = try!(self.eval_on(subject, c));
-                    self.eval_on(b_result, c_result)
-                } else {
-                    Err(EvalError::BadRecurseArgument)
-                }
-            }
-            3 => { // cell test
-                Ok(Noun::from_bool(try!(self.eval_on(subject, argument)).is_cell()))
-            }
-            4 => { // increment
-                math::natural_add(&try!(self.eval_on(subject, argument)), &Noun::from_u8(1))
-            }
-            5 => {
-                if let Some((lhs, rhs)) = try!(self.eval_on(subject, argument)).as_cell() {
-                    Ok(lhs.equal(rhs))
-                } else {
-                    Err(EvalError::BadEqualsArgument)
-                }
-            }
-            6 => {
-                if let Some((b, c, d)) = into_triple(argument) {
-                    let condition = try!(self.eval_on(subject.clone(), b));
-                    match condition.as_u8() {
-                        Some(0) => {
-                            self.eval_on(subject, c)
-                        }
-                        Some(1) => {
-                            self.eval_on(subject, d)
-                        }
-                        _ => {
-                            Err(EvalError::BadIfCondition)
-                        }
+            return match opcode {
+                0 => subject.axis(&argument),
+                1 => Ok(argument),
+                2 => {
+                    if let Some((b, c)) = argument.into_cell() {
+                        let b_result = try!(self.eval_on(subject.clone(), b));
+                        let c_result = try!(self.eval_on(subject, c));
+                        subject = b_result;
+                        formula = c_result;
+                        continue 'eval_loop;
+                    } else {
+                        Err(EvalError::BadRecurseArgument)
                     }
-                } else {
-                    Err(EvalError::BadArgument)
                 }
-            }
-            7 => {
-                if let Some((b, c)) = argument.into_cell() {
-                    let b_of_x = try!(self.eval_on(subject, b));
-                    self.eval_on(b_of_x, c)
-                } else {
-                    Err(EvalError::BadArgument)
+                3 => { // cell test
+                    Ok(Noun::from_bool(try!(self.eval_on(subject, argument)).is_cell()))
                 }
-            }
-            8 => {
-                if let Some((b, c)) = argument.into_cell() {
-                    let subject_prime = try!(self.eval_on(subject.clone(), b));
-                    self.eval_on(Noun::new_cell(subject_prime, subject), c)
-                } else {
-                    Err(EvalError::BadArgument)
+                4 => { // increment
+                    math::natural_add(&try!(self.eval_on(subject, argument)), &Noun::from_u8(1))
                 }
-            }
-            9 => {
-                if let Some((b, c)) = argument.into_cell() {
-                    let core = try!(self.eval_on(subject, c));
-                    let formula = try!(core.axis(&b));
-                    self.eval_on(core, formula)
-                } else {
-                    Err(EvalError::BadArgument)
+                5 => {
+                    if let Some((lhs, rhs)) = try!(self.eval_on(subject, argument)).as_cell() {
+                        Ok(lhs.equal(rhs))
+                    } else {
+                        Err(EvalError::BadEqualsArgument)
+                    }
                 }
-            }
-            _ => Err(EvalError::BadOpcode(opcode)),
+                6 => {
+                    if let Some((b, c, d)) = into_triple(argument) {
+                        let condition = try!(self.eval_on(subject.clone(), b));
+                        match condition.as_u8() {
+                            Some(0) => {
+                                self.eval_on(subject, c)
+                            }
+                            Some(1) => {
+                                self.eval_on(subject, d)
+                            }
+                            _ => {
+                                Err(EvalError::BadIfCondition)
+                            }
+                        }
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                7 => {
+                    if let Some((b, c)) = argument.into_cell() {
+                        let b_of_x = try!(self.eval_on(subject, b));
+                        subject = b_of_x;
+                        formula = c;
+                        continue 'eval_loop;
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                8 => {
+                    if let Some((b, c)) = argument.into_cell() {
+                        let subject_prime = try!(self.eval_on(subject.clone(), b));
+                        subject = Noun::new_cell(subject_prime, subject);
+                        formula = c;
+                        continue 'eval_loop;
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                9 => {
+                    if let Some((b, c)) = argument.into_cell() {
+                        let core = try!(self.eval_on(subject, c));
+                        let inner_formula = try!(core.axis(&b));
+                        subject = core;
+                        formula = inner_formula;
+                        continue 'eval_loop;
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                _ => Err(EvalError::BadOpcode(opcode)),
+            };
         }
     }
 }
