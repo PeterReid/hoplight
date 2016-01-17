@@ -32,7 +32,7 @@ struct Computation {
 }
 
 impl Computation {
-    pub fn eval_on(&mut self, subject: &Noun, opcode: u8, argument: Noun) -> EvalResult {
+    pub fn eval_on(&mut self, subject: Noun, opcode: u8, argument: Noun) -> EvalResult {
         self.ticks_used += 1;
         if self.ticks_used >= self.tick_cap {
             return Err(EvalError::TickLimitExceeded);
@@ -42,9 +42,9 @@ impl Computation {
             1 => Ok(argument),
             2 => {
                 if let Some((b, c)) = argument.into_cell() {
-                    let b_result = try!(self.eval_pair(subject, b));
+                    let b_result = try!(self.eval_pair(subject.clone(), b));
                     let c_result = try!(self.eval_pair(subject, c));
-                    self.eval_pair(&b_result, c_result)
+                    self.eval_pair(b_result, c_result)
                 } else {
                     Err(EvalError::BadRecurseArgument)
                 }
@@ -64,7 +64,7 @@ impl Computation {
             }
             6 => {
                 if let Some((b, c, d)) = into_triple(argument) {
-                    let condition = try!(self.eval_pair(subject, b));
+                    let condition = try!(self.eval_pair(subject.clone(), b));
                     match condition.as_u8() {
                         Some(0) => {
                             self.eval_pair(subject, c)
@@ -83,15 +83,15 @@ impl Computation {
             7 => {
                 if let Some((b, c)) = argument.into_cell() {
                     let b_of_x = try!(self.eval_pair(subject, b));
-                    self.eval_pair(&b_of_x, c)
+                    self.eval_pair(b_of_x, c)
                 } else {
                     Err(EvalError::BadArgument)
                 }
             }
             8 => {
                 if let Some((b, c)) = argument.into_cell() {
-                    let subject_prime = try!(self.eval_pair(subject, b));
-                    self.eval_pair(&Noun::new_cell(subject_prime, subject.clone()), c)
+                    let subject_prime = try!(self.eval_pair(subject.clone(), b));
+                    self.eval_pair(Noun::new_cell(subject_prime, subject), c)
                 } else {
                     Err(EvalError::BadArgument)
                 }
@@ -100,7 +100,7 @@ impl Computation {
                 if let Some((b, c)) = argument.into_cell() {
                     let core = try!(self.eval_pair(subject, c));
                     let formula = try!(core.axis(&b));
-                    self.eval_pair(&core, formula)
+                    self.eval_pair(core, formula)
                 } else {
                     Err(EvalError::BadArgument)
                 }
@@ -109,15 +109,15 @@ impl Computation {
         }
     }
 
-    pub fn eval_pair(&mut self, subject: &Noun, formula: Noun) -> EvalResult {
+    pub fn eval_pair(&mut self, subject: Noun, formula: Noun) -> EvalResult {
         if let Some((operator, argument)) = formula.into_cell() {
             if let Some(opcode) = operator.as_byte() {
                 return self.eval_on(subject, opcode, argument);
             } else if operator.is_cell() { // distribute
-                return Ok(Noun::new_cell(
-                    try!(self.eval_pair(subject, operator)),
-                    try!(self.eval_pair(subject, argument)),
-                ));
+                self.ticks_used += 1;
+                let lhs = try!(self.eval_pair(subject.clone(), operator));
+                let rhs = try!(self.eval_pair(subject, argument));
+                return Ok(Noun::new_cell(lhs, rhs));
             }
         }
         Err(EvalError::Something)
@@ -130,7 +130,7 @@ pub fn eval(expression: Noun, tick_limit: u64) -> EvalResult {;
         Computation{
             tick_cap: tick_limit,
             ticks_used: 0,
-        }.eval_pair(&subject, formula)
+        }.eval_pair(subject, formula)
     } else {
         Err(EvalError::Something)
     }
