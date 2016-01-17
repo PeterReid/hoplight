@@ -1,6 +1,7 @@
 use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
 use checked_int_cast::CheckedIntCast;
+use std::ops::Deref;
 
 #[derive(Clone, Debug)]
 pub enum Noun {
@@ -26,7 +27,12 @@ impl PartialEq for Noun {
 }
 impl Eq for Noun {}
 
-
+fn own(noun: Rc<Noun>) -> Noun {
+    match Rc::try_unwrap(noun) {
+        Ok(x) => x,
+        Err(shared_x) => shared_x.deref().clone(),
+    }
+}
 
 impl Noun {
     pub fn new_cell(left: Noun, right: Noun) -> Noun {
@@ -151,6 +157,13 @@ impl Noun {
     pub fn as_cell(&self) -> Option<(&Noun, &Noun)> {
         match self {
             &Noun::Cell(ref a, ref b) => Some((a, b)),
+            _ => None
+        }
+    }
+
+    pub fn into_cell(self) -> Option<(Noun, Noun)> {
+        match self {
+            Noun::Cell(a, b) => Some((own(a), own(b))),
             _ => None
         }
     }

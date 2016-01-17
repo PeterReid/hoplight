@@ -15,9 +15,9 @@ pub enum EvalError {
     TickLimitExceeded,
 }
 
-fn as_triple(noun: &Noun) -> Option<(&Noun, &Noun, &Noun)> {
-    if let Some((a, bc)) = noun.as_cell() {
-        if let Some((b, c)) = bc.as_cell() {
+fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
+    if let Some((a, bc)) = noun.into_cell() {
+        if let Some((b, c)) = bc.into_cell() {
             return Some((a, b, c));
         }
     }
@@ -32,19 +32,19 @@ struct Computation {
 }
 
 impl Computation {
-    pub fn eval_on(&mut self, subject: &Noun, opcode: u8, argument: &Noun) -> EvalResult {
+    pub fn eval_on(&mut self, subject: &Noun, opcode: u8, argument: Noun) -> EvalResult {
         self.ticks_used += 1;
         if self.ticks_used >= self.tick_cap {
             return Err(EvalError::TickLimitExceeded);
         }
         match opcode {
-            0 => subject.axis(argument),
-            1 => Ok(argument.clone()),
+            0 => subject.axis(&argument),
+            1 => Ok(argument),
             2 => {
-                if let Some((b, c)) = argument.as_cell() {
+                if let Some((b, c)) = argument.into_cell() {
                     let b_result = try!(self.eval_pair(subject, b));
                     let c_result = try!(self.eval_pair(subject, c));
-                    self.eval_pair(&b_result, &c_result)
+                    self.eval_pair(&b_result, c_result)
                 } else {
                     Err(EvalError::BadRecurseArgument)
                 }
@@ -63,7 +63,7 @@ impl Computation {
                 }
             }
             6 => {
-                if let Some((b, c, d)) = as_triple(argument) {
+                if let Some((b, c, d)) = into_triple(argument) {
                     let condition = try!(self.eval_pair(subject, b));
                     match condition.as_u8() {
                         Some(0) => {
@@ -81,7 +81,7 @@ impl Computation {
                 }
             }
             7 => {
-                if let Some((b, c)) = argument.as_cell() {
+                if let Some((b, c)) = argument.into_cell() {
                     let b_of_x = try!(self.eval_pair(subject, b));
                     self.eval_pair(&b_of_x, c)
                 } else {
@@ -89,7 +89,7 @@ impl Computation {
                 }
             }
             8 => {
-                if let Some((b, c)) = argument.as_cell() {
+                if let Some((b, c)) = argument.into_cell() {
                     let subject_prime = try!(self.eval_pair(subject, b));
                     self.eval_pair(&Noun::new_cell(subject_prime, subject.clone()), c)
                 } else {
@@ -97,10 +97,10 @@ impl Computation {
                 }
             }
             9 => {
-                if let Some((b, c)) = argument.as_cell() {
+                if let Some((b, c)) = argument.into_cell() {
                     let core = try!(self.eval_pair(subject, c));
-                    let formula = try!(core.axis(b));
-                    self.eval_pair(&core, &formula)
+                    let formula = try!(core.axis(&b));
+                    self.eval_pair(&core, formula)
                 } else {
                     Err(EvalError::BadArgument)
                 }
@@ -109,8 +109,8 @@ impl Computation {
         }
     }
 
-    pub fn eval_pair(&mut self, subject: &Noun, formula: &Noun) -> EvalResult {
-        if let Some((operator, argument)) = formula.as_cell() {
+    pub fn eval_pair(&mut self, subject: &Noun, formula: Noun) -> EvalResult {
+        if let Some((operator, argument)) = formula.into_cell() {
             if let Some(opcode) = operator.as_byte() {
                 return self.eval_on(subject, opcode, argument);
             } else if operator.is_cell() { // distribute
@@ -125,12 +125,12 @@ impl Computation {
 }
 
 
-pub fn eval(expression: &Noun, tick_limit: u64) -> EvalResult {;
-    if let Some((subject, formula)) = expression.as_cell() {
+pub fn eval(expression: Noun, tick_limit: u64) -> EvalResult {;
+    if let Some((subject, formula)) = expression.into_cell() {
         Computation{
             tick_cap: tick_limit,
             ticks_used: 0,
-        }.eval_pair(subject, formula)
+        }.eval_pair(&subject, formula)
     } else {
         Err(EvalError::Something)
     }
@@ -144,7 +144,7 @@ mod test {
 
     fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) {
         assert_eq!(
-            eval(&expression.as_noun(), 1000000),
+            eval(expression.as_noun(), 1000000),
             Ok( result.as_noun() )
         );
     }
