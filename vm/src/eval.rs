@@ -1,6 +1,8 @@
 use noun::{Noun};
 use axis::Axis;
 use math;
+use crypto::blake2b::Blake2b;
+use serialize::{self, SerializationError};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -15,6 +17,7 @@ pub enum EvalError {
     BadIfCondition,
     TickLimitExceeded,
     AtomicFormula,
+    MemoryExceeded,
 }
 
 fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
@@ -127,8 +130,24 @@ impl Computation {
                         Err(EvalError::BadArgument)
                     }
                 }
+                10 => { // hash
+                    let hash_target = try!(self.eval_on(subject, argument));
+                    let buffer = try!(self.serialize(hash_target));
+                    self.ticks_used += 20 + (buffer.len() as u64);
+                    let mut result = [0u8; 64];
+                    Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
+                    Ok(Noun::from_slice(&result[..]))
+                }
                 _ => Err(EvalError::BadOpcode(opcode)),
             };
+        }
+    }
+
+    fn serialize(&mut self, noun: Noun) -> Result<Vec<u8>, EvalError> {
+        match serialize::serialize(&noun, 1_000_000) {
+            Ok(x) => Ok(x),
+            Err(SerializationError::OverlongAtom) => Err(EvalError::BadArgument),
+            Err(SerializationError::MaximumLengthExceeded) => Err(EvalError::MemoryExceeded),
         }
     }
 }

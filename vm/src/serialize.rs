@@ -75,6 +75,8 @@ impl Serializer {
     }
 }
 
+/// `maximum_atom_encoding_length` sets a rough upper bound on how much memory will be used. It controls
+/// how much space all the atoms in the encoding, combined, may take up.
 pub fn serialize(noun: &Noun, maximum_atom_encoding_length: usize) -> SerializationResult<Vec<u8>> {
     let mut serializer = Serializer::new(maximum_atom_encoding_length);
     
