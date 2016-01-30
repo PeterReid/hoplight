@@ -1,0 +1,8 @@
+[package]
+name = "vm"
+version = "0.1.0"
+authors = ["Peter Reid <peter.d.reid@gmail.com>"]
+
+[dependencies]
+checked_int_cast = "1.0.0"
+rust-crypto = "*"
