@@ -3,6 +3,7 @@ use axis::Axis;
 use math;
 use crypto::blake2b::Blake2b;
 use serialize::{self, SerializationError};
+use deserialize::deserialize;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -18,6 +19,7 @@ pub enum EvalError {
     TickLimitExceeded,
     AtomicFormula,
     MemoryExceeded,
+    StorageCorrupt,
 }
 
 fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
@@ -31,12 +33,21 @@ fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
 
 pub type EvalResult = Result<Noun, EvalError>;
 
-struct Computation {
-    ticks_used: u64,
-    tick_cap: u64,
+pub trait SideEffectEngine {
+    fn nearest_neighbor(&mut self, near: &[u8; 32]) -> [u8; 32];
+    fn random(&mut self, &mut [u8]);
+    fn load(&mut self, key: &[u8]) -> Option<Vec<u8>>;
+    fn store(&mut self, key: &[u8], value: &[u8]);
+    fn send(&mut self, destination: &[u8; 32], message: &[u8], local_cost: u64);
 }
 
-impl Computation {
+struct Computation<'a, S: 'a> {
+    ticks_used: u64,
+    tick_cap: u64,
+    side_effector: &'a mut S,
+}
+
+impl<'a, S: SideEffectEngine> Computation<'a, S> {
     pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
         'tail_recurse: loop {
             self.ticks_used += 1;
@@ -138,6 +149,41 @@ impl Computation {
                     Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
                     Ok(Noun::from_slice(&result[..]))
                 }
+                11 => { // store by hash
+                    let hash_target = try!(self.eval_on(subject, argument));
+                    let buffer = try!(self.serialize(hash_target));
+                    self.ticks_used += 20 + (buffer.len() as u64);
+                    let mut result = [0u8; 64 + 1];
+                    result[0] = 1;
+                    Blake2b::blake2b(&mut result[1..], &buffer, &[][..]);
+                    self.side_effector.store(&result[..], &buffer[..]);
+                    Ok(Noun::from_bool(true)) // TODO: It might be better to return the hash
+                }
+                12 => { // retrieve by hash
+                    let hash = try!(self.eval_on(subject, argument));
+                    if let Noun::Atom(x) = hash {
+                        let mut prefixed_hash = Vec::new();
+                        prefixed_hash.push(1);
+                        prefixed_hash.extend(x.iter());
+                        
+                        // TODO: It might be better to always return a cell.
+                        if let Some(xs) = self.side_effector.load(&prefixed_hash[..]) {
+                            let decoded = try!(deserialize(&xs[..]).map_err(|_| EvalError::StorageCorrupt));
+                            Ok(Noun::new_cell(
+                                Noun::from_bool(true),
+                                decoded
+                            ))
+                        } else {
+                            Ok(Noun::from_bool(false))
+                        }
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                //11 => { // send
+                //    if let Some((b, c, d)) = 
+                //}
+                
                 _ => Err(EvalError::BadOpcode(opcode)),
             };
         }
@@ -153,11 +199,12 @@ impl Computation {
 }
 
 
-pub fn eval(expression: Noun, tick_limit: u64) -> EvalResult {;
+pub fn eval<S: SideEffectEngine>(expression: Noun, side_effector: &mut S, tick_limit: u64) -> EvalResult {
     if let Some((subject, formula)) = expression.into_cell() {
         Computation{
             tick_cap: tick_limit,
             ticks_used: 0,
+            side_effector: side_effector,
         }.eval_on(subject, formula)
     } else {
         Err(EvalError::Something)
@@ -168,13 +215,51 @@ pub fn eval(expression: Noun, tick_limit: u64) -> EvalResult {;
 mod test {
     use noun::Noun;
     use as_noun::AsNoun;
-    use eval::eval;
+    use eval::{eval, SideEffectEngine};
+    use std::collections::HashMap;
+    
+    struct TestSideEffectEngine {
+        storage: HashMap<Vec<u8>, Vec<u8>>,
+    }
+    
+    impl TestSideEffectEngine {
+        fn new() -> TestSideEffectEngine {
+            TestSideEffectEngine{
+                storage: HashMap::new()
+            }
+        }
+    }
+    
+    impl SideEffectEngine for TestSideEffectEngine {
+        fn nearest_neighbor(&mut self, near: &[u8; 32]) -> [u8; 32] {
+            [0u8; 32]
+        }
+        fn random(&mut self, dest: &mut [u8]) {
+        }
+        //fn expected_storage_return(&mut self, storage_signing_key: &[u8; 32]) -> u64 {
+        //    0
+        //}
+        fn load(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+            self.storage.get(key).cloned()
+        }
+        fn store(&mut self, key: &[u8], value: &[u8]) {
+            self.storage.insert(key.into(), value.into());
+        }
+        fn send(&mut self, destination: &[u8; 32], message: &[u8], local_cost: u64) {
+        }
+    }
 
-    fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) {
+    fn expect_eval_with<E: AsNoun, R: AsNoun>(engine: &mut TestSideEffectEngine, expression: E, result: R) {
         assert_eq!(
-            eval(expression.as_noun(), 1000000),
+            eval(expression.as_noun(), engine, 1000000),
             Ok( result.as_noun() )
         );
+    }
+    
+    fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) -> TestSideEffectEngine {
+        let mut engine = TestSideEffectEngine::new();
+        expect_eval_with(&mut engine, expression, result);
+        engine
     }
 
     #[test]
@@ -273,4 +358,17 @@ mod test {
             (42, (8, (1, 0), 8, (1, 6, (5, (0, 7), 4, 0, 6), (0, 6), (9, 2, (0, 2), (4, 0, 6), 0, 7)), (9, 2, 0, 1))),
             41);
     }
+    
+    #[test]
+    fn store_and_get() {
+        let mut engine = expect_eval(
+            (21, 2, ((11, (0, 1)), (4, (0, 1))),   (1, 0, 3)),
+            22
+            );
+        let hash = eval( (21, 10, (0, 1)).as_noun(), &mut engine, 1000000).unwrap();
+        expect_eval_with(&mut engine,
+            (hash, (12, (0, 1))),
+            (0, 21));
+    }
+    
 }
