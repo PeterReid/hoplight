@@ -4,6 +4,7 @@ use math;
 use crypto::blake2b::Blake2b;
 use serialize::{self, SerializationError};
 use deserialize::deserialize;
+use opcode::*;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -47,6 +48,7 @@ struct Computation<'a, S: 'a> {
     side_effector: &'a mut S,
 }
 
+
 impl<'a, S: SideEffectEngine> Computation<'a, S> {
     pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
         'tail_recurse: loop {
@@ -66,9 +68,9 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
             let opcode = try!(opcode_noun.as_u8().ok_or(EvalError::NotAnOpcode));
 
             return match opcode {
-                0 => subject.axis(&argument),
-                1 => Ok(argument),
-                2 => {
+                AXIS => subject.axis(&argument),
+                LITERAL => Ok(argument),
+                RECURSE => {
                     if let Some((b, c)) = argument.into_cell() {
                         let b_result = try!(self.eval_on(subject.clone(), b));
                         let c_result = try!(self.eval_on(subject, c));
@@ -79,20 +81,20 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         Err(EvalError::BadRecurseArgument)
                     }
                 }
-                3 => { // cell test
+                IS_CELL => { // cell test
                     Ok(Noun::from_bool(try!(self.eval_on(subject, argument)).is_cell()))
                 }
-                4 => { // increment
+                INCREMENT => { // increment
                     math::natural_add(&try!(self.eval_on(subject, argument)), &Noun::from_u8(1))
                 }
-                5 => {
+                IS_EQUAL => {
                     if let Some((lhs, rhs)) = try!(self.eval_on(subject, argument)).as_cell() {
                         Ok(lhs.equal(rhs))
                     } else {
                         Err(EvalError::BadEqualsArgument)
                     }
                 }
-                6 => {
+                IF => {
                     if let Some((b, c, d)) = into_triple(argument) {
                         let condition = try!(self.eval_on(subject.clone(), b));
                         match condition.as_u8() {
@@ -110,7 +112,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         Err(EvalError::BadArgument)
                     }
                 }
-                7 => {
+                COMPOSE => {
                     if let Some((b, c)) = argument.into_cell() {
                         let b_of_x = try!(self.eval_on(subject, b));
                         subject = b_of_x;
@@ -120,7 +122,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         Err(EvalError::BadArgument)
                     }
                 }
-                8 => {
+                DEFINE => {
                     if let Some((b, c)) = argument.into_cell() {
                         let subject_prime = try!(self.eval_on(subject.clone(), b));
                         subject = Noun::new_cell(subject_prime, subject);
@@ -130,7 +132,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         Err(EvalError::BadArgument)
                     }
                 }
-                9 => {
+                CALL => {
                     if let Some((b, c)) = argument.into_cell() {
                         let core = try!(self.eval_on(subject, c));
                         let inner_formula = try!(core.axis(&b));
@@ -141,7 +143,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         Err(EvalError::BadArgument)
                     }
                 }
-                10 => { // hash
+                HASH => { // hash
                     let hash_target = try!(self.eval_on(subject, argument));
                     let buffer = try!(self.serialize(hash_target));
                     self.ticks_used += 20 + (buffer.len() as u64);
@@ -149,7 +151,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
                     Ok(Noun::from_slice(&result[..]))
                 }
-                11 => { // store by hash
+                STORE_BY_HASH => { // store by hash
                     let hash_target = try!(self.eval_on(subject, argument));
                     let buffer = try!(self.serialize(hash_target));
                     self.ticks_used += 20 + (buffer.len() as u64);
@@ -159,13 +161,13 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     self.side_effector.store(&result[..], &buffer[..]);
                     Ok(Noun::from_bool(true)) // TODO: It might be better to return the hash
                 }
-                12 => { // retrieve by hash
+                RETRIEVE_BY_HASH => { // retrieve by hash
                     let hash = try!(self.eval_on(subject, argument));
                     if let Noun::Atom(x) = hash {
                         let mut prefixed_hash = Vec::new();
                         prefixed_hash.push(1);
                         prefixed_hash.extend(x.iter());
-                        
+
                         // TODO: It might be better to always return a cell.
                         if let Some(xs) = self.side_effector.load(&prefixed_hash[..]) {
                             let decoded = try!(deserialize(&xs[..]).map_err(|_| EvalError::StorageCorrupt));
@@ -181,9 +183,9 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     }
                 }
                 //11 => { // send
-                //    if let Some((b, c, d)) = 
+                //    if let Some((b, c, d)) =
                 //}
-                
+
                 _ => Err(EvalError::BadOpcode(opcode)),
             };
         }
@@ -217,11 +219,12 @@ mod test {
     use as_noun::AsNoun;
     use eval::{eval, SideEffectEngine};
     use std::collections::HashMap;
-    
+    use opcode::*;
+
     struct TestSideEffectEngine {
         storage: HashMap<Vec<u8>, Vec<u8>>,
     }
-    
+
     impl TestSideEffectEngine {
         fn new() -> TestSideEffectEngine {
             TestSideEffectEngine{
@@ -229,14 +232,14 @@ mod test {
             }
         }
     }
-    
+
     impl SideEffectEngine for TestSideEffectEngine {
         fn nearest_neighbor(&mut self, near: &[u8; 32]) -> [u8; 32] {
             [0u8; 32]
         }
         fn random(&mut self, dest: &mut [u8]) {
         }
-        //fn expected_storage_return(&mut self, storage_signing_key: &[u8; 32]) -> u64 {
+        //fn expected_storage_return(&mut self, storage_signing_key: &[u8; 32]) -> u64 { // guess of how much it will pay
         //    0
         //}
         fn load(&mut self, key: &[u8]) -> Option<Vec<u8>> {
@@ -255,7 +258,7 @@ mod test {
             Ok( result.as_noun() )
         );
     }
-    
+
     fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) -> TestSideEffectEngine {
         let mut engine = TestSideEffectEngine::new();
         expect_eval_with(&mut engine, expression, result);
@@ -265,9 +268,9 @@ mod test {
     #[test]
     fn literal_op() {
         expect_eval((0, 1, 44), 44);
-        
+
         expect_eval(
-            ((76, 30), 1, (42, 60)), 
+            ((76, 30), 1, (42, 60)),
             (42, 60)
         );
     }
@@ -277,7 +280,7 @@ mod test {
         expect_eval((99, 0, 1), 99);
         expect_eval(((98, 99), 0, 2), 98);
         expect_eval(((98, 99), 0, 3), 99);
-        
+
         expect_eval(((1, 2, 3, 4, (5, 6, 7, (8, 9, 10, 11))), 0, &[0xff, 0x07][..]),
             11);
         expect_eval(((((1, 2), 3), 4), 0, 5),
@@ -285,18 +288,18 @@ mod test {
         expect_eval(((((1, 2), 3), 4), 0, 4),
             (1, 2));
     }
-    
+
     #[test]
     fn recurse_op() {
         expect_eval(((123, (0, 1)), 2, (0, 2), (0, 3)), 123);
     }
-    
+
     #[test]
     fn equal_op() {
         expect_eval(((5, 5), 5, (0, 1)),  Noun::from_bool(true));
         expect_eval(((5, 8), 5, (0, 1)),  Noun::from_bool(false));
     }
-    
+
     #[test]
     fn cell_op() {
         expect_eval(((99, 33), 3, (0, 1)),  Noun::from_bool(true));
@@ -358,17 +361,17 @@ mod test {
             (42, (8, (1, 0), 8, (1, 6, (5, (0, 7), 4, 0, 6), (0, 6), (9, 2, (0, 2), (4, 0, 6), 0, 7)), (9, 2, 0, 1))),
             41);
     }
-    
+
     #[test]
     fn store_and_get() {
         let mut engine = expect_eval(
-            (21, 2, ((11, (0, 1)), (4, (0, 1))),   (1, 0, 3)),
+            (21, RECURSE, ((STORE_BY_HASH, (AXIS, 1)), (INCREMENT, (AXIS, 1))),   (LITERAL, AXIS, 3)),
             22
             );
-        let hash = eval( (21, 10, (0, 1)).as_noun(), &mut engine, 1000000).unwrap();
+        let hash = eval( (21, HASH, (AXIS, 1)).as_noun(), &mut engine, 1000000).unwrap();
         expect_eval_with(&mut engine,
-            (hash, (12, (0, 1))),
+            (hash, (RETRIEVE_BY_HASH, (AXIS, 1))),
             (0, 21));
     }
-    
+
 }

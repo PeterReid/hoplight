@@ -8,3 +8,4 @@ pub mod noun;
 pub mod as_noun;
 pub mod serialize;
 pub mod deserialize;
+mod opcode;
