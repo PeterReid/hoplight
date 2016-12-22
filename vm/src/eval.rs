@@ -162,7 +162,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     Ok(Noun::from_bool(true)) // TODO: It might be better to return the hash
                 }
                 RETRIEVE_BY_HASH => { // retrieve by hash
-                    let hash = try!(self.eval_on(subject, argument));
+                    let hash = try!(self.eval_on(subject.clone(), argument));
                     if let Noun::Atom(x) = hash {
                         let mut prefixed_hash = Vec::new();
                         prefixed_hash.push(1);
@@ -170,16 +170,16 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
 
                         // TODO: It might be better to always return a cell.
                         if let Some(xs) = self.side_effector.load(&prefixed_hash[..]) {
-                            let decoded = try!(deserialize(&xs[..]).map_err(|_| EvalError::StorageCorrupt));
+                            let retrieved = try!(deserialize(&xs[..]).map_err(|_| EvalError::StorageCorrupt));
                             Ok(Noun::new_cell(
                                 Noun::from_bool(true),
-                                decoded
+                                try!(self.eval_on(subject, retrieved))
                             ))
                         } else {
                             Ok(Noun::from_bool(false))
                         }
                     } else {
-                        Err(EvalError::BadArgument)
+                        Ok(Noun::from_bool(false))
                     }
                 }
                 //11 => { // send
@@ -365,10 +365,10 @@ mod test {
     #[test]
     fn store_and_get() {
         let mut engine = expect_eval(
-            (21, RECURSE, ((STORE_BY_HASH, (AXIS, 1)), (INCREMENT, (AXIS, 1))),   (LITERAL, AXIS, 3)),
+            (21, RECURSE, ((STORE_BY_HASH, ((LITERAL, LITERAL), (AXIS, 1))), (INCREMENT, (AXIS, 1))),   (LITERAL, AXIS, 3)),
             22
             );
-        let hash = eval( (21, HASH, (AXIS, 1)).as_noun(), &mut engine, 1000000).unwrap();
+        let hash = eval( (21, HASH, ((LITERAL, LITERAL), (AXIS, 1))).as_noun(), &mut engine, 1000000).unwrap();
         expect_eval_with(&mut engine,
             (hash, (RETRIEVE_BY_HASH, (AXIS, 1))),
             (0, 21));
