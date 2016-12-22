@@ -3,7 +3,7 @@ use std::rc::Rc;
 use checked_int_cast::CheckedIntCast;
 use std::ops::Deref;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Noun {
     SmallAtom{value: u32, length: u8},
     Atom(Rc<Vec<u8>>),
@@ -186,6 +186,26 @@ impl Noun {
             }
             _ => {
                 None
+            }
+        }
+    }
+}
+
+impl ::std::fmt::Debug for Noun {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+        match self {
+            &Noun::Cell(ref a, ref b) => write!(f, "[{:?} {:?}]", a, b),
+            &Noun::SmallAtom{value, length} => {
+                for x in 0..length {
+                    try!(write!(f, "{:02x}", (value >> (x*8)) & 0xff));
+                }
+                Ok( () )
+            }
+            &Noun::Atom(ref a) => {
+                for byte in a.iter() {
+                    try!(write!(f, "{:02x}", *byte));
+                }
+                Ok( () )
             }
         }
     }
