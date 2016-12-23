@@ -50,6 +50,21 @@ struct Computation<'a, S: 'a> {
 
 
 impl<'a, S: SideEffectEngine> Computation<'a, S> {
+    pub fn retrieve_with_tag(&mut self, subject: Noun, mut key: Vec<u8>, tag: u8) -> Result<Noun, EvalError> {
+        key.push(tag);
+
+        // TODO: It might be better to always return a cell.
+        if let Some(xs) = self.side_effector.load(&key[..]) {
+            let retrieved = try!(deserialize(&xs[..]).map_err(|_| EvalError::StorageCorrupt));
+            Ok(Noun::new_cell(
+                Noun::from_bool(true),
+                try!(self.eval_on(subject, retrieved))
+            ))
+        } else {
+            Ok(Noun::from_bool(false))
+        }
+    }
+
     pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
         'tail_recurse: loop {
             self.ticks_used += 1;
@@ -156,31 +171,37 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     let buffer = try!(self.serialize(hash_target));
                     self.ticks_used += 20 + (buffer.len() as u64);
                     let mut result = [0u8; 64 + 1];
-                    result[0] = 1;
-                    Blake2b::blake2b(&mut result[1..], &buffer, &[][..]);
+                    result[64] = 1;
+                    Blake2b::blake2b(&mut result[..64], &buffer, &[][..]);
+                    println!("storing to {:?}", result.to_vec());
                     self.side_effector.store(&result[..], &buffer[..]);
                     Ok(Noun::from_bool(true)) // TODO: It might be better to return the hash
                 }
                 RETRIEVE_BY_HASH => { // retrieve by hash
                     let hash = try!(self.eval_on(subject.clone(), argument));
-                    if let Noun::Atom(x) = hash {
-                        let mut prefixed_hash = Vec::new();
-                        prefixed_hash.push(1);
-                        prefixed_hash.extend(x.iter());
-
-                        // TODO: It might be better to always return a cell.
-                        if let Some(xs) = self.side_effector.load(&prefixed_hash[..]) {
-                            let retrieved = try!(deserialize(&xs[..]).map_err(|_| EvalError::StorageCorrupt));
-                            Ok(Noun::new_cell(
-                                Noun::from_bool(true),
-                                try!(self.eval_on(subject, retrieved))
-                            ))
-                        } else {
-                            Ok(Noun::from_bool(false))
-                        }
+                    if let Some(hash_bytes) = hash.into_vec() {
+                        self.retrieve_with_tag(subject, hash_bytes, 1)
                     } else {
                         Ok(Noun::from_bool(false))
                     }
+                }
+                STORE_BY_KEY => {
+                    if let Some((b, c)) = argument.into_cell() {
+                        let key = try!(self.eval_on(subject.clone(), b));
+                        let value = try!(self.eval_on(subject, c));
+                        let mut storage_key = try!(self.serialize(key));
+                        storage_key.push(0);
+                        let storage_value = try!(self.serialize(value));
+                        self.side_effector.store(&storage_key[..], &storage_value[..]);
+                        Ok(Noun::from_bool(true))
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                RETRIEVE_BY_KEY => {
+                    let key = try!(self.eval_on(subject.clone(), argument));
+                    let key_bytes = try!(self.serialize(key));
+                    self.retrieve_with_tag(subject, key_bytes, 0)
                 }
                 //11 => { // send
                 //    if let Some((b, c, d)) =
@@ -363,7 +384,7 @@ mod test {
     }
 
     #[test]
-    fn store_and_get() {
+    fn store_and_get_hash() {
         let mut engine = expect_eval(
             (21, RECURSE, ((STORE_BY_HASH, ((LITERAL, LITERAL), (AXIS, 1))), (INCREMENT, (AXIS, 1))),   (LITERAL, AXIS, 3)),
             22
@@ -374,4 +395,13 @@ mod test {
             (0, 21));
     }
 
+    #[test]
+    fn store_and_get_key() {
+        let mut engine = expect_eval(
+            (&b"orange"[..], (STORE_BY_KEY, (LITERAL, &b"color"[..]), ((LITERAL, LITERAL), (AXIS, 1)))),
+            Noun::from_bool(true));
+        expect_eval_with(&mut engine,
+            (&b"color"[..], (RETRIEVE_BY_KEY, (AXIS, 1))),
+            (0, &b"orange"[..]));
+    }
 }

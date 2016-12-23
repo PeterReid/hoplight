@@ -33,6 +33,12 @@ fn own(noun: Rc<Noun>) -> Noun {
         Err(shared_x) => shared_x.deref().clone(),
     }
 }
+fn own_vec(xs: Rc<Vec<u8>>) -> Vec<u8> {
+    match Rc::try_unwrap(xs) {
+        Ok(x) => x,
+        Err(shared_xs) => shared_xs.deref().clone(),
+    }
+}
 
 impl Noun {
     pub fn new_cell(left: Noun, right: Noun) -> Noun {
@@ -187,6 +193,20 @@ impl Noun {
             _ => {
                 None
             }
+        }
+    }
+
+    pub fn into_vec(self) -> Option<Vec<u8>> {
+        match self {
+            Noun::SmallAtom{value, length} => {
+                let mut xs = Vec::with_capacity(length as usize);
+                for i in 0..length {
+                    xs.push(((value >> (i*8)) & 0xff) as u8);
+                }
+                Some(xs)
+            }
+            Noun::Atom(xs) => Some(own_vec(xs)),
+            Noun::Cell(_, _) => None,
         }
     }
 }

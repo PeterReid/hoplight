@@ -11,3 +11,5 @@ pub const CALL: u8 = 9;
 pub const HASH: u8 = 10;
 pub const STORE_BY_HASH: u8 = 11;
 pub const RETRIEVE_BY_HASH: u8 = 12;
+pub const STORE_BY_KEY: u8 = 13;
+pub const RETRIEVE_BY_KEY: u8 = 14;
