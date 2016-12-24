@@ -11,6 +11,7 @@ pub enum EvalError {
     Something,
     CellAsIndex,
     IndexOutOfRange,
+    InvalidLength,
     NotAnOpcode,
     BadOpcode(u8),
     BadRecurseArgument,
@@ -203,6 +204,15 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     let key_bytes = try!(self.serialize(key));
                     self.retrieve_with_tag(subject, key_bytes, 0)
                 }
+                RANDOM => {
+                    let length = try!(try!(self.eval_on(subject, argument)).as_usize().ok_or(EvalError::InvalidLength));
+                    if length > 1_000_000 {
+                        return Err(EvalError::InvalidLength);
+                    }
+                    let mut xs = vec![0u8; length];
+                    self.side_effector.random(&mut xs);
+                    Ok(Noun::from_vec(xs))
+                }
                 //11 => { // send
                 //    if let Some((b, c, d)) =
                 //}
@@ -241,24 +251,31 @@ mod test {
     use eval::{eval, SideEffectEngine};
     use std::collections::HashMap;
     use opcode::*;
+    use chacha::{ChaCha, KeyStream};
 
     struct TestSideEffectEngine {
         storage: HashMap<Vec<u8>, Vec<u8>>,
+        rng: ChaCha,
     }
 
     impl TestSideEffectEngine {
         fn new() -> TestSideEffectEngine {
             TestSideEffectEngine{
-                storage: HashMap::new()
+                storage: HashMap::new(),
+                rng: ChaCha::new_chacha20(&[1u8; 32], &[0u8; 8]),
             }
         }
     }
 
     impl SideEffectEngine for TestSideEffectEngine {
-        fn nearest_neighbor(&mut self, near: &[u8; 32]) -> [u8; 32] {
+        fn nearest_neighbor(&mut self, _near: &[u8; 32]) -> [u8; 32] {
             [0u8; 32]
         }
         fn random(&mut self, dest: &mut [u8]) {
+            for b in dest.iter_mut() {
+                *b = 0;
+            }
+            self.rng.xor_read(dest).expect("RNG end reached");
         }
         //fn expected_storage_return(&mut self, storage_signing_key: &[u8; 32]) -> u64 { // guess of how much it will pay
         //    0
@@ -269,8 +286,13 @@ mod test {
         fn store(&mut self, key: &[u8], value: &[u8]) {
             self.storage.insert(key.into(), value.into());
         }
-        fn send(&mut self, destination: &[u8; 32], message: &[u8], local_cost: u64) {
+        fn send(&mut self, _destination: &[u8; 32], _message: &[u8], _local_cost: u64) {
         }
+    }
+
+    fn eval_simple<E: AsNoun>(expression: E) -> Noun {
+        let mut engine = TestSideEffectEngine::new();
+        eval(expression.as_noun(), &mut engine, 1000000).expect("eval_simple expression got an error")
     }
 
     fn expect_eval_with<E: AsNoun, R: AsNoun>(engine: &mut TestSideEffectEngine, expression: E, result: R) {
@@ -403,5 +425,16 @@ mod test {
         expect_eval_with(&mut engine,
             (&b"color"[..], (RETRIEVE_BY_KEY, (AXIS, 1))),
             (0, &b"orange"[..]));
+    }
+
+    #[test]
+    fn gen_random() {
+        let random = eval_simple( (20, RANDOM, (AXIS, 1)) );
+        let buf = random.into_vec().expect("random should have made an atom");
+        assert_eq!(buf.len(), 20);
+        // These bytes will probably be different.
+        // We use a deterministic RNG, so a this failure won't be intermittent.
+        // I do want to catch leaving this uninitialized somehow.
+        assert!(buf[0] != buf[1] || buf[1] != buf[2]);
     }
 }

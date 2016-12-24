@@ -1,5 +1,6 @@
 extern crate checked_int_cast;
 extern crate crypto;
+extern crate chacha;
 
 pub mod axis;
 pub mod eval;
