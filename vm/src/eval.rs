@@ -411,7 +411,7 @@ mod test {
             (21, RECURSE, ((STORE_BY_HASH, ((LITERAL, LITERAL), (AXIS, 1))), (INCREMENT, (AXIS, 1))),   (LITERAL, AXIS, 3)),
             22
             );
-        let hash = eval( (21, HASH, ((LITERAL, LITERAL), (AXIS, 1))).as_noun(), &mut engine, 1000000).unwrap();
+        let hash = eval_simple( (21, HASH, ((LITERAL, LITERAL), (AXIS, 1))) );
         expect_eval_with(&mut engine,
             (hash, (RETRIEVE_BY_HASH, (AXIS, 1))),
             (0, 21));
