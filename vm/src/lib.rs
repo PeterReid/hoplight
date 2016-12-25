@@ -7,6 +7,9 @@ pub mod eval;
 mod math;
 pub mod noun;
 pub mod as_noun;
-pub mod serialize;
-pub mod deserialize;
+mod serialize;
+mod deserialize;
 mod opcode;
+
+pub use deserialize::deserialize;
+pub use serialize::serialize;
