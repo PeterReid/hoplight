@@ -22,6 +22,7 @@ pub enum EvalError {
     AtomicFormula,
     MemoryExceeded,
     StorageCorrupt,
+    EvalOnAtom,
 }
 
 fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
@@ -115,10 +116,12 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         let condition = try!(self.eval_on(subject.clone(), b));
                         match condition.as_u8() {
                             Some(0) => {
-                                self.eval_on(subject, c)
+                                formula = c;
+                                continue 'tail_recurse;
                             }
                             Some(1) => {
-                                self.eval_on(subject, d)
+                                formula = d;
+                                continue 'tail_recurse;
                             }
                             _ => {
                                 Err(EvalError::BadIfCondition)
@@ -174,7 +177,6 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     let mut result = [0u8; 64 + 1];
                     result[64] = 1;
                     Blake2b::blake2b(&mut result[..64], &buffer, &[][..]);
-                    println!("storing to {:?}", result.to_vec());
                     self.side_effector.store(&result[..], &buffer[..]);
                     Ok(Noun::from_bool(true)) // TODO: It might be better to return the hash
                 }
@@ -240,7 +242,7 @@ pub fn eval<S: SideEffectEngine>(expression: Noun, side_effector: &mut S, tick_l
             side_effector: side_effector,
         }.eval_on(subject, formula)
     } else {
-        Err(EvalError::Something)
+        Err(EvalError::EvalOnAtom)
     }
 }
 
@@ -436,5 +438,43 @@ mod test {
         // We use a deterministic RNG, so a this failure won't be intermittent.
         // I do want to catch leaving this uninitialized somehow.
         assert!(buf[0] != buf[1] || buf[1] != buf[2]);
+    }
+    
+    #[test]
+    fn guessing_game() {
+        let rightleftleft = 12;
+        let rightleftright = 13;
+        let rightright = 7;
+        let left = 2;
+        let rightleft = 6;
+        
+        let f = (IF, (IS_EQUAL, (AXIS, rightleftleft), (AXIS, rightleftright)),
+            (LITERAL, &b"correct"[..]),
+            (IF, (IS_EQUAL, (AXIS, rightleftleft), (AXIS, rightright)),
+                (LITERAL, &b"too small"[..]),
+                (IF, (IS_EQUAL, (AXIS, rightleftright), (AXIS, rightright)),
+                    (LITERAL, &b"too big"[..]),
+                    (RECURSE, ((AXIS, left),
+                              ((AXIS, rightleft),
+                               (INCREMENT, (AXIS, rightright))
+                              )),
+                              (AXIS, left)
+                    )))).as_noun();
+        let make_context_and_data = (
+            (LITERAL, f.clone()),
+            (
+              (
+                (AXIS, 1),
+                (LITERAL, 42),
+              ),
+              (LITERAL, 0)
+            )
+        ).as_noun();
+        
+        let runner = (COMPOSE, make_context_and_data, (RECURSE, (AXIS, 1), (AXIS, 2))).as_noun();
+        
+        expect_eval((44, runner.clone()), &b"too big"[..]);
+        expect_eval((6, runner.clone()), &b"too small"[..]);
+        expect_eval((42, runner.clone()), &b"correct"[..]);
     }
 }
