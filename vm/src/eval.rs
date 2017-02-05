@@ -5,6 +5,9 @@ use crypto::blake2b::Blake2b;
 use serialize::{self, SerializationError};
 use deserialize::deserialize;
 use opcode::*;
+use shape::shape;
+use std::convert::From;
+use ticks::{CostError, Ticks};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -23,6 +26,7 @@ pub enum EvalError {
     MemoryExceeded,
     StorageCorrupt,
     EvalOnAtom,
+    BadShape,
 }
 
 fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
@@ -45,11 +49,15 @@ pub trait SideEffectEngine {
 }
 
 struct Computation<'a, S: 'a> {
-    ticks_used: u64,
-    tick_cap: u64,
+    ticks_remaining: Ticks,
     side_effector: &'a mut S,
 }
 
+impl From<CostError> for EvalError {
+    fn from(_: CostError) -> EvalError {
+        EvalError::TickLimitExceeded
+    }
+}
 
 impl<'a, S: SideEffectEngine> Computation<'a, S> {
     pub fn retrieve_with_tag(&mut self, subject: Noun, mut key: Vec<u8>, tag: u8) -> Result<Noun, EvalError> {
@@ -69,10 +77,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
 
     pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
         'tail_recurse: loop {
-            self.ticks_used += 1;
-            if self.ticks_used >= self.tick_cap {
-                return Err(EvalError::TickLimitExceeded);
-            }
+            try!(self.ticks_remaining.incur(1));
 
             let (opcode_noun, argument) = try!(formula.into_cell().ok_or(EvalError::AtomicFormula));
             if opcode_noun.is_cell() {
@@ -165,7 +170,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 HASH => { // hash
                     let hash_target = try!(self.eval_on(subject, argument));
                     let buffer = try!(self.serialize(hash_target));
-                    self.ticks_used += 20 + (buffer.len() as u64);
+                    try!(self.ticks_remaining.incur(20 + (buffer.len() as u64)));
                     let mut result = [0u8; 64];
                     Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
                     Ok(Noun::from_slice(&result[..]))
@@ -173,7 +178,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 STORE_BY_HASH => { // store by hash
                     let hash_target = try!(self.eval_on(subject, argument));
                     let buffer = try!(self.serialize(hash_target));
-                    self.ticks_used += 20 + (buffer.len() as u64);
+                    try!(self.ticks_remaining.incur(20 + (buffer.len() as u64)));
                     let mut result = [0u8; 64 + 1];
                     result[64] = 1;
                     Blake2b::blake2b(&mut result[..64], &buffer, &[][..]);
@@ -215,6 +220,17 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     self.side_effector.random(&mut xs);
                     Ok(Noun::from_vec(xs))
                 }
+                SHAPE => {
+                    if let Some((data_expr, structure_expr)) = argument.into_cell() {
+                        shape(
+                            &try!(self.eval_on(subject.clone(), data_expr)),
+                            &try!(self.eval_on(subject, structure_expr)),
+                            &mut self.ticks_remaining
+                        )?.ok_or(EvalError::BadShape)
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
                 //11 => { // send
                 //    if let Some((b, c, d)) =
                 //}
@@ -237,8 +253,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
 pub fn eval<S: SideEffectEngine>(expression: Noun, side_effector: &mut S, tick_limit: u64) -> EvalResult {
     if let Some((subject, formula)) = expression.into_cell() {
         Computation{
-            tick_cap: tick_limit,
-            ticks_used: 0,
+            ticks_remaining: Ticks::new(tick_limit),
             side_effector: side_effector,
         }.eval_on(subject, formula)
     } else {

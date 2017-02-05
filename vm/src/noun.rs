@@ -2,6 +2,7 @@ use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
 use checked_int_cast::CheckedIntCast;
 use std::ops::Deref;
+use ticks::{Ticks, CostResult};
 
 #[derive(Clone)]
 pub enum Noun {
@@ -44,19 +45,31 @@ impl Noun {
     pub fn new_cell(left: Noun, right: Noun) -> Noun {
         Noun::Cell(Rc::new(left), Rc::new(right))
     }
-    
+
     pub fn from_bool(source: bool) -> Noun {
         Noun::from_u8(if source { 0 } else { 1 })
     }
-    
+
+    pub fn len(&self, ticks: &mut Ticks) -> CostResult<usize> {
+        try!(ticks.incur(1));
+
+        Ok(match self {
+            &Noun::Cell(ref left, ref right) => {
+                left.len(ticks)? + right.len(ticks)?
+            },
+            &Noun::SmallAtom{value: _, length} => length as usize,
+            &Noun::Atom(ref xs) => xs.len()
+        })
+    }
+
     pub fn from_u8(source: u8) -> Noun {
         Noun::SmallAtom{value: source as u32, length: 1}
     }
-    
+
     pub fn equal(&self, other: &Noun) -> Noun {
         Noun::from_bool(self == other)
     }
-    
+
     pub fn from_usize_compact(mut source: usize) -> Noun {
         let mut bs = Vec::new();
         while source != 0 {
@@ -65,7 +78,7 @@ impl Noun {
         }
         Noun::from_vec(bs)
     }
-    
+
     pub fn as_usize(&self) -> Option<usize> {
         match self {
             &Noun::Cell(_, _) => None,
@@ -88,7 +101,7 @@ impl Noun {
             }
         }
     }
-    
+
     pub fn as_u8(&self) -> Option<u8> {
         match self {
             &Noun::Cell(_, _) => None,
@@ -116,7 +129,7 @@ impl Noun {
                 | ((source.get(3).map(|x| *x).unwrap_or(0) as u32) << 24)
         }
     }
-    
+
     pub fn from_vec(source: Vec<u8>) -> Noun {
         if source.len() <= 4 {
             Noun::from_small_slice(&source)
@@ -132,7 +145,21 @@ impl Noun {
             Noun::from_vec(source.to_vec())
         }
     }
-    
+
+    pub fn atom_len(&self) -> Option<usize> {
+        match self {
+            &Noun::SmallAtom{value: _, length} => {
+                Some(length as usize)
+            }
+            &Noun::Atom(ref xs) => {
+                Some(xs.len())
+            }
+            &Noun::Cell(_, _) => {
+                None
+            }
+        }
+    }
+
     pub fn as_kind<'a>(&'a self, buf: &'a mut [u8; 4]) -> NounKind<'a> {
         match self {
             &Noun::SmallAtom{value, length} => {
@@ -152,7 +179,7 @@ impl Noun {
             }
         }
     }
-    
+
     pub fn is_cell(&self) -> bool {
         match self {
             &Noun::Cell(_, _) => true,
@@ -187,7 +214,7 @@ impl Noun {
                 if (&xs[1..]).iter().position(|x| *x!=0).is_some() {
                     return None;
                 }
-                
+
                 Some(xs.get(0).map(|x| *x).unwrap_or(0))
             }
             _ => {

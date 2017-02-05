@@ -10,6 +10,8 @@ mod as_noun;
 mod serialize;
 mod deserialize;
 mod opcode;
+mod shape;
+mod ticks;
 
 pub use deserialize::deserialize;
 pub use serialize::serialize;
