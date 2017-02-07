@@ -2,7 +2,6 @@ use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
 use checked_int_cast::CheckedIntCast;
 use std::ops::Deref;
-use ticks::{Ticks, CostResult};
 
 #[derive(Clone)]
 pub enum Noun {
@@ -48,18 +47,6 @@ impl Noun {
 
     pub fn from_bool(source: bool) -> Noun {
         Noun::from_u8(if source { 0 } else { 1 })
-    }
-
-    pub fn len(&self, ticks: &mut Ticks) -> CostResult<usize> {
-        try!(ticks.incur(1));
-
-        Ok(match self {
-            &Noun::Cell(ref left, ref right) => {
-                left.len(ticks)? + right.len(ticks)?
-            },
-            &Noun::SmallAtom{value: _, length} => length as usize,
-            &Noun::Atom(ref xs) => xs.len()
-        })
     }
 
     pub fn from_u8(source: u8) -> Noun {

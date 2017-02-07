@@ -1,16 +1,30 @@
 use noun::{Noun, NounKind};
 use std::io::{self, Read};
-use ticks::{Ticks, CostResult};
+use ticks::Ticks;
+use std::mem::size_of;
 
-fn populate_structure<R: Read>(structure: &Noun, data_source: &mut R) -> Noun {
+#[derive(Debug, Eq, PartialEq)]
+pub enum ShapeError {
+    AllocationBoundExceeded,
+    DataTooShort,
+}
+
+fn populate_structure<R: Read>(structure: &Noun, data_source: &mut R, allocation_bound: &mut Ticks) -> Result<Noun, ShapeError> {
+    try!(allocation_bound.incur(size_of::<Noun>() as u64).map_err(|_| ShapeError::AllocationBoundExceeded));
+
     if let Some((left, right)) = structure.as_cell() {
-        return Noun::new_cell( populate_structure(left, data_source), populate_structure(right, data_source) );
+        return Ok(Noun::new_cell(
+            try!(populate_structure(left, data_source, allocation_bound)),
+            try!(populate_structure(right, data_source, allocation_bound)) ));
     }
 
-    let expected_count = structure.as_usize().expect("populate_structure had a structure atom that was not a size");
+    let expected_count = try!(structure.as_usize().ok_or(ShapeError::AllocationBoundExceeded));
+    try!(allocation_bound.incur(expected_count as u64).map_err(|_| ShapeError::AllocationBoundExceeded));
+
     let mut xs = vec![0u8; expected_count];
-    data_source.read_exact(&mut xs[..]).expect("populate_structure data source exhausted");
-    Noun::from_vec(xs)
+    try!(data_source.read_exact(&mut xs[..]).map_err(|_| ShapeError::DataTooShort));
+
+    Ok(Noun::from_vec(xs))
 }
 
 pub struct NounReader<'a> {
@@ -80,23 +94,26 @@ impl<'a> Read for NounReader<'a> {
     }
 }
 
-pub fn shape(data: &Noun, structure: &Noun, ticks: &mut Ticks) -> CostResult<Option<Noun>> {
-    let mut nr = NounReader::new(data, ticks);
-
-    Ok(Some(populate_structure(structure, &mut nr)))
+pub fn shape(data: &Noun, structure: &Noun, ticks: &mut Ticks, allocation_bound: usize) -> Result<Noun, ShapeError> {
+    populate_structure(structure, &mut NounReader::new(data, ticks), &mut Ticks::new(allocation_bound as u64))
 }
 
 #[cfg(test)]
 mod test {
     use as_noun::AsNoun;
-    use super::shape;
+    use super::{shape, ShapeError};
     use ticks::Ticks;
+    use noun::Noun;
 
     fn testcase<D: AsNoun, S: AsNoun, R: AsNoun>(data: D, structure: S, expected_result: R) {
         assert_eq!(
-            shape(&data.as_noun(), &structure.as_noun(), &mut Ticks::new(1_000_000)),
-            Ok(Some(expected_result.as_noun()))
+            shape(&data.as_noun(), &structure.as_noun(), &mut Ticks::new(1_000_000), 1_000_000),
+            Ok(expected_result.as_noun())
         )
+    }
+
+    fn is_malformed<D: AsNoun, S: AsNoun>(data: D, structure: S, error: ShapeError) {
+        assert_eq!(shape(&data.as_noun(), &structure.as_noun(), &mut Ticks::new(1_000_000), 1_000_000), Err(error));
     }
 
     #[test]
@@ -117,5 +134,20 @@ mod test {
     #[test]
     fn rearrange() {
         testcase((&[1,2][..], &[3,4,5][..]), (3, 2), (&[1,2,3][..], &[4,5][..]));
+    }
+
+    #[test]
+    fn too_short_input() {
+        is_malformed((&[1,2][..], &[3,4,5][..]), 6, ShapeError::DataTooShort);
+    }
+
+    #[test]
+    fn too_long() {
+        let mut x = Noun::from_u8(1);
+        for _ in 0..50 {
+            x = Noun::new_cell(x.clone(), x.clone());
+        }
+
+        is_malformed(x, Noun::from_usize_compact(2_000_000), ShapeError::AllocationBoundExceeded);
     }
 }

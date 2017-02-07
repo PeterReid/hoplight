@@ -225,8 +225,9 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         shape(
                             &try!(self.eval_on(subject.clone(), data_expr)),
                             &try!(self.eval_on(subject, structure_expr)),
-                            &mut self.ticks_remaining
-                        )?.ok_or(EvalError::BadShape)
+                            &mut self.ticks_remaining,
+                            10_000_000,
+                        ).map_err(|_| EvalError::BadShape)
                     } else {
                         Err(EvalError::BadArgument)
                     }
