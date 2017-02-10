@@ -12,6 +12,7 @@ mod deserialize;
 mod opcode;
 mod shape;
 mod ticks;
+mod equal;
 
 pub use deserialize::deserialize;
 pub use serialize::serialize;

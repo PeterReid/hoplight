@@ -8,6 +8,7 @@ use opcode::*;
 use shape::shape;
 use std::convert::From;
 use ticks::{CostError, Ticks};
+use equal::equal;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -111,7 +112,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 }
                 IS_EQUAL => {
                     if let Some((lhs, rhs)) = try!(self.eval_on(subject, argument)).as_cell() {
-                        Ok(lhs.equal(rhs))
+                        Ok(Noun::from_bool(equal(lhs, rhs, &mut self.ticks_remaining)?))
                     } else {
                         Err(EvalError::BadEqualsArgument)
                     }
