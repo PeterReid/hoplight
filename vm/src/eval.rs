@@ -195,9 +195,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     }
                 }
                 STORE_BY_KEY => {
-                    if let Some((b, c)) = argument.into_cell() {
-                        let key = try!(self.eval_on(subject.clone(), b));
-                        let value = try!(self.eval_on(subject, c));
+                    if let Some((key, value)) = self.eval_on(subject, argument)?.into_cell() {
                         let mut storage_key = try!(self.serialize(key));
                         storage_key.push(0);
                         let storage_value = try!(self.serialize(value));
@@ -222,10 +220,10 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     Ok(Noun::from_vec(xs))
                 }
                 SHAPE => {
-                    if let Some((data_expr, structure_expr)) = argument.into_cell() {
+                    if let Some((data, structure)) = self.eval_on(subject, argument)?.into_cell() {
                         shape(
-                            &try!(self.eval_on(subject.clone(), data_expr)),
-                            &try!(self.eval_on(subject, structure_expr)),
+                            &data,
+                            &structure,
                             &mut self.ticks_remaining,
                             10_000_000,
                         ).map_err(|_| EvalError::BadShape)
