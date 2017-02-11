@@ -1,5 +1,5 @@
 use noun::{Noun, NounKind};
-use std::io::{self, Read};
+use std::io::{self, Read, Cursor};
 use ticks::Ticks;
 use std::mem::size_of;
 
@@ -28,7 +28,7 @@ fn populate_structure<R: Read>(structure: &Noun, data_source: &mut R, allocation
 }
 
 pub struct NounReader<'a> {
-    current_node: Option<(&'a Noun, usize)>,
+    current_node: Option<Cursor<(&'a [u8])>>,
     stack: Vec<&'a Noun>,
     ticks: &'a mut Ticks,
 }
@@ -45,51 +45,39 @@ impl<'a> NounReader<'a> {
 
 impl<'a> Read for NounReader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        while self.current_node.is_none() {
-            let mut stack_top: &'a Noun = if let Some(stack_top) = self.stack.pop() {
-                    stack_top
-                } else {
-                    return Ok(0);
-                };
+        loop {
+            while self.current_node.is_none() {
+                let mut stack_top: &'a Noun = if let Some(stack_top) = self.stack.pop() {
+                        stack_top
+                    } else {
+                        return Ok(0);
+                    };
 
-            loop {
-                if let Some((left, right)) = stack_top.as_cell() {
-                    stack_top = left;
-                    self.stack.push(right);
-                } else if stack_top.atom_len().unwrap_or(0) > 0 {
-                    self.current_node = Some((stack_top, 0));
-                    break;
-                } else {
-                    break;
+                loop {
+                    match stack_top.as_kind() {
+                        NounKind::Atom(xs) => {
+                            if xs.len() > 0 {
+                                self.current_node = Some(Cursor::new(xs));
+                            }
+                            break;
+                        }
+                        NounKind::Cell(left, right) => {
+                            stack_top = left;
+                            self.stack.push(right);
+                        }
+                    }
                 }
             }
-        }
 
-        let mut finished = false;
-        let ret = if let Some((ref mut current_node, ref mut pos)) = self.current_node {
-            Ok(match current_node.as_kind() {
-                NounKind::Atom(noun_contents) => {
-                    let read_count = try!((&noun_contents[*pos..]).read(buf));
-                    *pos += read_count;
-                    finished = *pos == noun_contents.len();
-
+            if let Some(ref mut cursor) = self.current_node {
+                let read_count = try!(cursor.read(buf));
+                if read_count > 0 {
                     try!(self.ticks.incur(read_count as u64).map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "cost exceeded")));
-
-                    read_count
+                    return Ok(read_count);
                 }
-                _ => {
-                    panic!("NounReader's current_node was not an atom")
-                }
-            })
-        } else {
-            Ok(0)
-        };
-
-        if finished {
+            }
             self.current_node = None;
         }
-
-        ret
     }
 }
 
