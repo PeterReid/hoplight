@@ -2,10 +2,11 @@ use std::cmp::{Eq, PartialEq};
 use std::rc::Rc;
 use checked_int_cast::CheckedIntCast;
 use std::ops::Deref;
+use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(Clone)]
 pub enum Noun {
-    SmallAtom{value: u32, length: u8},
+    SmallAtom{value: [u8; 4], length: u8},
     Atom(Rc<Vec<u8>>),
     Cell(Rc<Noun>, Rc<Noun>),
 }
@@ -50,7 +51,7 @@ impl Noun {
     }
 
     pub fn from_u8(source: u8) -> Noun {
-        Noun::SmallAtom{value: source as u32, length: 1}
+        Noun::SmallAtom{value: [source, 0, 0, 0], length: 1}
     }
 
     pub fn equal(&self, other: &Noun) -> Noun {
@@ -69,7 +70,7 @@ impl Noun {
     pub fn as_usize(&self) -> Option<usize> {
         match self {
             &Noun::Cell(_, _) => None,
-            &Noun::SmallAtom{value, length: _} => value.as_usize_checked(),
+            &Noun::SmallAtom{value, length: _} => LittleEndian::read_u32(&value[..]).as_usize_checked(),
             &Noun::Atom(ref xs) => {
                 let mut shift = 0u8;
                 let mut accum: usize = 0;
@@ -92,7 +93,7 @@ impl Noun {
     pub fn as_u8(&self) -> Option<u8> {
         match self {
             &Noun::Cell(_, _) => None,
-            &Noun::SmallAtom{value, length:_} => value.as_u8_checked(),
+            &Noun::SmallAtom{value, length:_} => LittleEndian::read_u32(&value[..]).as_u8_checked(),
             &Noun::Atom(ref xs) => {
                 if xs.len() > 1 {
                     for x in &xs[1..] {
@@ -110,10 +111,12 @@ impl Noun {
     fn from_small_slice(source: &[u8]) -> Noun {
         Noun::SmallAtom{
             length: source.len() as u8,
-            value: (source.get(0).map(|x| *x).unwrap_or(0) as u32)
-                | ((source.get(1).map(|x| *x).unwrap_or(0) as u32) << 8)
-                | ((source.get(2).map(|x| *x).unwrap_or(0) as u32) << 16)
-                | ((source.get(3).map(|x| *x).unwrap_or(0) as u32) << 24)
+            value: [
+                source.get(0).map(|x| *x).unwrap_or(0),
+                source.get(1).map(|x| *x).unwrap_or(0),
+                source.get(2).map(|x| *x).unwrap_or(0),
+                source.get(3).map(|x| *x).unwrap_or(0)
+            ]
         }
     }
 
@@ -151,10 +154,10 @@ impl Noun {
         match self {
             &Noun::SmallAtom{value, length} => {
                 // TODO: Use byteorder
-                buf[0] = value as u8;
-                buf[1] = (value>>8) as u8;
-                buf[2] = (value>>16) as u8;
-                buf[3] = (value>>24) as u8;
+                buf[0] = value[0];
+                buf[1] = value[1];
+                buf[2] = value[2];
+                buf[3] = value[3];
                 NounKind::Atom(&buf[0..length as usize])
             }
             &Noun::Atom(ref xs) => {
@@ -191,8 +194,8 @@ impl Noun {
     pub fn as_byte(&self) -> Option<u8> {
         match self {
             &Noun::SmallAtom{value, length: _} => {
-                if value<256 {
-                    Some(value as u8)
+                if value[1] == 0 && value[2] == 0 && value[3] == 0 {
+                    Some(value[0])
                 } else {
                     None
                 }
@@ -213,11 +216,7 @@ impl Noun {
     pub fn into_vec(self) -> Option<Vec<u8>> {
         match self {
             Noun::SmallAtom{value, length} => {
-                let mut xs = Vec::with_capacity(length as usize);
-                for i in 0..length {
-                    xs.push(((value >> (i*8)) & 0xff) as u8);
-                }
-                Some(xs)
+                Some(value[0..length as usize].to_vec())
             }
             Noun::Atom(xs) => Some(own_vec(xs)),
             Noun::Cell(_, _) => None,
@@ -230,8 +229,8 @@ impl ::std::fmt::Debug for Noun {
         match self {
             &Noun::Cell(ref a, ref b) => write!(f, "[{:?} {:?}]", a, b),
             &Noun::SmallAtom{value, length} => {
-                for x in 0..length {
-                    try!(write!(f, "{:02x}", (value >> (x*8)) & 0xff));
+                for byte in value[..length as usize].iter() {
+                    try!(write!(f, "{:02x}", *byte));
                 }
                 Ok( () )
             }

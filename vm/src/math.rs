@@ -4,23 +4,6 @@ use std::cmp::max;
 use std::iter::repeat;
 
 pub fn natural_add(x: &Noun, y: &Noun) -> EvalResult {
-    // Fast path: adding two small atoms together
-    if let (&Noun::SmallAtom{value:x_value, length: x_length}, &Noun::SmallAtom{value:y_value, length: y_length}) = (x, y) {
-        if let Some(sum) = x_value.checked_add(y_value) {
-            let required_length =
-                if sum <= 0xff {
-                    1
-                } else if sum <= 0xffff {
-                    2
-                } else if sum <= 0xffffff {
-                    3
-                } else {
-                    4
-                };
-            return Ok(Noun::SmallAtom{value: sum, length: max(required_length, max(x_length, y_length))});
-        }
-    }
-    
     // Slow path: byte by byte adding
     let mut x_buf = [0u8; 4];
     let mut y_buf = [0u8; 4];
