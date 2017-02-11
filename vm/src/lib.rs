@@ -5,7 +5,6 @@ extern crate byteorder;
 
 mod axis;
 mod eval;
-mod math;
 mod noun;
 mod as_noun;
 mod serialize;

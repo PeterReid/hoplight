@@ -1,6 +1,5 @@
 use noun::{Noun};
 use axis::Axis;
-use math;
 use crypto::blake2b::Blake2b;
 use serialize::{self, SerializationError};
 use deserialize::deserialize;
@@ -106,9 +105,6 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 }
                 IS_CELL => { // cell test
                     Ok(Noun::from_bool(try!(self.eval_on(subject, argument)).is_cell()))
-                }
-                INCREMENT => { // increment
-                    math::natural_add(&try!(self.eval_on(subject, argument)), &Noun::from_u8(1))
                 }
                 IS_EQUAL => {
                     if let Some((lhs, rhs)) = try!(self.eval_on(subject, argument)).as_cell() {
@@ -269,6 +265,8 @@ mod test {
     use std::collections::HashMap;
     use opcode::*;
     use chacha::{ChaCha, KeyStream};
+    use serialize;
+    use crypto::blake2b::Blake2b;
 
     struct TestSideEffectEngine {
         storage: HashMap<Vec<u8>, Vec<u8>>,
@@ -368,23 +366,23 @@ mod test {
 
     #[test]
     fn increment_op() {
-        expect_eval((22, 4, (0, 1)),  Noun::from_u8(23));
-        expect_eval((0xff, 4, (0, 1)),  Noun::from_vec(vec![0x00, 0x01]));
+        let hash_target = (5, 3, &b"longer atom"[..]).as_noun();
+        expect_eval((hash_target.clone(), HASH, (0, 1)), hash(hash_target));
     }
 
     #[test]
     fn distribute() {
         expect_eval(
-            (22, (4, (0, 1)), (0, 1), (1, 50)),
-            (23, 22, 50).as_noun()
+            (22, (HASH, (0, 1)), (0, 1), (1, 50)),
+            (hash(22), 22, 50).as_noun()
         );
     }
 
     #[test]
     fn if_true() {
         expect_eval(
-            (42, (6, (1, 0), (4, 0, 1), (1, 233))),
-            43);
+            (42, (6, (1, 0), (HASH, 0, 1), (1, 233))),
+            hash(42));
     }
 
     #[test]
@@ -397,36 +395,36 @@ mod test {
     #[test]
     fn composition() {
         expect_eval(
-            (42, (7, (4, 0, 1), (4, 0, 1))),
-            44);
+            (42, (7, (HASH, 0, 1), (HASH, 0, 1))),
+            hash(hash(42)));
     }
 
     #[test]
     fn push_1() {
         expect_eval(
-            (42, (8, (4, 0, 1), (0, 1))),
-            (43, 42));
+            (42, (8, (HASH, 0, 1), (0, 1))),
+            (hash(42), 42));
     }
 
     #[test]
     fn push_2() {
         expect_eval(
-            (42, (8, (4, 0, 1), (4, 0, 3))),
-            43);
+            (42, (8, (HASH, 0, 1), (HASH, 0, 3))),
+            hash(42));
     }
 
     #[test]
     fn decrement() {
         expect_eval(
-            (42, (8, (1, 0), 8, (1, 6, (5, (0, 7), 4, 0, 6), (0, 6), (9, 2, (0, 2), (4, 0, 6), 0, 7)), (9, 2, 0, 1))),
-            41);
+            (iterate_hash(42), (8, (1, 0), 8, (1, 6, (5, (0, 7), HASH, 0, 6), (0, 6), (9, 2, (0, 2), (HASH, 0, 6), 0, 7)), (9, 2, 0, 1))),
+            iterate_hash(41));
     }
 
     #[test]
     fn store_and_get_hash() {
         let mut engine = expect_eval(
-            (21, RECURSE, ((STORE_BY_HASH, ((LITERAL, LITERAL), (AXIS, 1))), (INCREMENT, (AXIS, 1))),   (LITERAL, AXIS, 3)),
-            22
+            (21, RECURSE, ((STORE_BY_HASH, ((LITERAL, LITERAL), (AXIS, 1))), ((AXIS, 1), (LITERAL, 2), (AXIS, 1))),   (LITERAL, AXIS, 3)),
+            (21, 2, 21)
             );
         let hash = eval_simple( (21, HASH, ((LITERAL, LITERAL), (AXIS, 1))) );
         expect_eval_with(&mut engine,
@@ -455,8 +453,24 @@ mod test {
         assert!(buf[0] != buf[1] || buf[1] != buf[2]);
     }
     
+    fn hash<T: AsNoun>(x: T) -> Noun {
+        let buffer = serialize::serialize(&x.as_noun(), 100000).expect("hash serialization failed");
+        let mut result = [0u8; 64];
+        Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
+        Noun::from_slice(&result[..])
+    }
+    
+    fn iterate_hash(rounds: usize) -> Noun {
+        let mut x = Noun::from_u8(0);
+        for _ in 0..rounds {
+            x = hash(x);
+        }
+        x
+    }
+    
     #[test]
     fn guessing_game() {
+        
         let rightleftleft = 12;
         let rightleftright = 13;
         let rightright = 7;
@@ -471,7 +485,7 @@ mod test {
                     (LITERAL, &b"too big"[..]),
                     (RECURSE, ((AXIS, left),
                               ((AXIS, rightleft),
-                               (INCREMENT, (AXIS, rightright))
+                               (HASH, (AXIS, rightright))
                               )),
                               (AXIS, left)
                     )))).as_noun();
@@ -480,7 +494,7 @@ mod test {
             (
               (
                 (AXIS, 1),
-                (LITERAL, 42),
+                (LITERAL, iterate_hash(42)),
               ),
               (LITERAL, 0)
             )
@@ -488,8 +502,8 @@ mod test {
         
         let runner = (COMPOSE, make_context_and_data, (RECURSE, (AXIS, 1), (AXIS, 2))).as_noun();
         
-        expect_eval((44, runner.clone()), &b"too big"[..]);
-        expect_eval((6, runner.clone()), &b"too small"[..]);
-        expect_eval((42, runner.clone()), &b"correct"[..]);
+        expect_eval((iterate_hash(44), runner.clone()), &b"too big"[..]);
+        expect_eval((iterate_hash(6), runner.clone()), &b"too small"[..]);
+        expect_eval((iterate_hash(42), runner.clone()), &b"correct"[..]);
     }
 }
