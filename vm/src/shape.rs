@@ -65,10 +65,9 @@ impl<'a> Read for NounReader<'a> {
             }
         }
 
-        let mut little_buffer = [0u8; 4];
         let mut finished = false;
         let ret = if let Some((ref mut current_node, ref mut pos)) = self.current_node {
-            Ok(match current_node.as_kind(&mut little_buffer) {
+            Ok(match current_node.as_kind() {
                 NounKind::Atom(noun_contents) => {
                     let read_count = try!((&noun_contents[*pos..]).read(buf));
                     *pos += read_count;

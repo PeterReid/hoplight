@@ -150,15 +150,10 @@ impl Noun {
         }
     }
 
-    pub fn as_kind<'a>(&'a self, buf: &'a mut [u8; 4]) -> NounKind<'a> {
+    pub fn as_kind<'a>(&'a self) -> NounKind<'a> {
         match self {
-            &Noun::SmallAtom{value, length} => {
-                // TODO: Use byteorder
-                buf[0] = value[0];
-                buf[1] = value[1];
-                buf[2] = value[2];
-                buf[3] = value[3];
-                NounKind::Atom(&buf[0..length as usize])
+            &Noun::SmallAtom{ref value, length} => {
+                NounKind::Atom(&value[0..length as usize])
             }
             &Noun::Atom(ref xs) => {
                 //let ys: &'a Rc<Vec<u8>> = xs;

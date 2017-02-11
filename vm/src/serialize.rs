@@ -59,8 +59,7 @@ impl Serializer {
     }
 
     fn serialize_noun(&mut self, noun: &Noun) -> SerializationResult<()> {
-        let mut atom_buf = [0u8; 4];
-        match noun.as_kind(&mut atom_buf) {
+        match noun.as_kind() {
             NounKind::Cell(lhs, rhs) => {
                 self.structure.push(true);
                 try!(self.serialize_noun(lhs));

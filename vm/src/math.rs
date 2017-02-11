@@ -5,9 +5,7 @@ use std::iter::repeat;
 
 pub fn natural_add(x: &Noun, y: &Noun) -> EvalResult {
     // Slow path: byte by byte adding
-    let mut x_buf = [0u8; 4];
-    let mut y_buf = [0u8; 4];
-    if let (NounKind::Atom(xs), NounKind::Atom(ys)) = (x.as_kind(&mut x_buf), y.as_kind(&mut y_buf)) {
+    if let (NounKind::Atom(xs), NounKind::Atom(ys)) = (x.as_kind(), y.as_kind()) {
         let mut result = Vec::with_capacity(max(xs.len(), ys.len())+1);
         
         // Make xs be the long one

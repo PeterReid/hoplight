@@ -103,8 +103,7 @@ fn axis_for<T: Iterator<Item=bool>>(subject: &Noun, mut bits: T) -> EvalResult {
 
 impl Axis for Noun {
     fn axis(&self, index: &Noun) -> EvalResult {
-        let mut buf = [0u8; 4];
-        match index.as_kind(&mut buf) {
+        match index.as_kind() {
             NounKind::Atom(xs) => {
                 axis_for(self, ByteSliceBitIterator::new(xs))
             }
