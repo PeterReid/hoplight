@@ -23,7 +23,6 @@ A noun is encoded as:
     3  ::  
     4  ::    ?[a b]            0
     5  ::    ?a                1
-    6  ::    +a                1 + a
     7  ::    =[a a]            0
     8  ::    =[a b]            1
     9  ::
@@ -48,7 +47,7 @@ A noun is encoded as:
     28 ::    *[a 1 b]          b
     29 ::    *[a 2 b c]        *[*[a b] *[a c]]
     30 ::    *[a 3 b]          ?*[a b]
-    31 ::    *[a 4 b]          +*[a b]
+    31 ::    *[a 4 b c]        @[*[a b] *[a c]]
     32 ::    *[a 5 b]          =*[a b]
     33 ::
     34 ::    *[a 6 b c d]      *[a 2 [0 1] 2 [1 c d] [1 0] 2 [1 2 3] [1 0] 4 4 b]
@@ -63,5 +62,4 @@ A noun is encoded as:
     43 ::    *[a 14 b]         1           if nothing had been stored under the key *[a b]
     44 ::                      [0 *[a X]]  if X had been stored under the key *[a b]
     45 ::    *[a 15 b]         A random atom of length *[a b]
-    46 ::    *[a 16 b c]       @[*[a b] *[a c]]
 ```
