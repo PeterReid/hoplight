@@ -1,6 +1,9 @@
-use noun::{Noun};
+use noun::{Noun, NounKind};
 use axis::Axis;
 use crypto::blake2b::Blake2b;
+use crypto::digest::Digest;
+use crypto::aead::{AeadEncryptor, AeadDecryptor};
+use crypto::chacha20poly1305::ChaCha20Poly1305;
 use serialize::{self, SerializationError};
 use deserialize::deserialize;
 use opcode::*;
@@ -27,16 +30,28 @@ pub enum EvalError {
     StorageCorrupt,
     EvalOnAtom,
     BadShape,
+    DecryptionFailed,
 }
 
-fn into_triple(noun: Noun) -> Option<(Noun, Noun, Noun)> {
+fn double_arg(noun: Noun) -> Result<(Noun, Noun), EvalError> {
+    noun.into_cell().ok_or(EvalError::BadArgument)
+}
+fn triple_arg(noun: Noun) -> Result<(Noun, Noun, Noun), EvalError> {
     if let Some((a, bc)) = noun.into_cell() {
         if let Some((b, c)) = bc.into_cell() {
-            return Some((a, b, c));
+            return Ok((a, b, c));
         }
     }
-    None
+    Err(EvalError::BadArgument)
 }
+fn bytes_arg(noun: &Noun) -> Result<&[u8], EvalError> {
+    if let NounKind::Atom(xs) = noun.as_kind() {
+        Ok(xs)
+    } else {
+        Err(EvalError::BadArgument)
+    }
+}
+
 
 pub type EvalResult = Result<Noun, EvalError>;
 
@@ -46,6 +61,7 @@ pub trait SideEffectEngine {
     fn load(&mut self, key: &[u8]) -> Option<Vec<u8>>;
     fn store(&mut self, key: &[u8], value: &[u8]);
     fn send(&mut self, destination: &[u8; 32], message: &[u8], local_cost: u64);
+    fn secret(&self) -> &[u8; 32];
 }
 
 struct Computation<'a, S: 'a> {
@@ -58,6 +74,10 @@ impl From<CostError> for EvalError {
         EvalError::TickLimitExceeded
     }
 }
+
+const SYMMETRIC_NONCE_LEN: usize = 8;
+const SYMMETRIC_TAG_LEN: usize = 16;
+
 
 impl<'a, S: SideEffectEngine> Computation<'a, S> {
     pub fn retrieve_with_tag(&mut self, subject: Noun, mut key: Vec<u8>, tag: u8) -> Result<Noun, EvalError> {
@@ -72,6 +92,36 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
             ))
         } else {
             Ok(Noun::from_bool(false))
+        }
+    }
+
+    /// The private key corresponding to an atom is only computable by the secret holder.
+    /// the private key corresponding to a cell is computable by anyone, given knownledge
+    /// of the private key of its right child.
+    fn private_symmetric_key_for(&mut self, public: &Noun, branched_right: bool) -> Result<[u8; 64], EvalError> {
+        match public.as_kind() {
+            NounKind::Atom(xs) => {
+                self.ticks_remaining.incur(xs.len() as u64)?;
+                let mut result = [0u8; 64];
+                Blake2b::blake2b(&mut result[..], &xs,
+                    if branched_right {
+                        &self.side_effector.secret()[..]
+                    } else {
+                        &[][..]
+                    });
+                Ok(result)
+            }
+            NounKind::Cell(left, right) => {
+                self.ticks_remaining.incur(128)?;
+                let left_hash = self.private_symmetric_key_for(left, false)?;
+                let right_hash = self.private_symmetric_key_for(right, true)?;
+                let mut hasher = Blake2b::new(64);
+                hasher.input(&left_hash[..]);
+                hasher.input(&right_hash[..]);
+                let mut output = [0u8; 64];
+                hasher.result(&mut output[..]);
+                Ok(output)
+            }
         }
     }
 
@@ -114,23 +164,20 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     }
                 }
                 IF => {
-                    if let Some((b, c, d)) = into_triple(argument) {
-                        let condition = try!(self.eval_on(subject.clone(), b));
-                        match condition.as_u8() {
-                            Some(0) => {
-                                formula = c;
-                                continue 'tail_recurse;
-                            }
-                            Some(1) => {
-                                formula = d;
-                                continue 'tail_recurse;
-                            }
-                            _ => {
-                                Err(EvalError::BadIfCondition)
-                            }
+                    let (b, c, d) = triple_arg(argument)?;
+                    let condition = try!(self.eval_on(subject.clone(), b));
+                    match condition.as_u8() {
+                        Some(0) => {
+                            formula = c;
+                            continue 'tail_recurse;
                         }
-                    } else {
-                        Err(EvalError::BadArgument)
+                        Some(1) => {
+                            formula = d;
+                            continue 'tail_recurse;
+                        }
+                        _ => {
+                            Err(EvalError::BadIfCondition)
+                        }
                     }
                 }
                 COMPOSE => {
@@ -166,7 +213,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 }
                 HASH => { // hash
                     let hash_target = try!(self.eval_on(subject, argument));
-                    let buffer = try!(self.serialize(hash_target));
+                    let buffer = try!(self.serialize(&hash_target));
                     try!(self.ticks_remaining.incur(20 + (buffer.len() as u64)));
                     let mut result = [0u8; 64];
                     Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
@@ -174,7 +221,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 }
                 STORE_BY_HASH => { // store by hash
                     let hash_target = try!(self.eval_on(subject, argument));
-                    let buffer = try!(self.serialize(hash_target));
+                    let buffer = try!(self.serialize(&hash_target));
                     try!(self.ticks_remaining.incur(20 + (buffer.len() as u64)));
                     let mut result = [0u8; 64 + 1];
                     result[64] = 1;
@@ -192,9 +239,9 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 }
                 STORE_BY_KEY => {
                     if let Some((key, value)) = self.eval_on(subject, argument)?.into_cell() {
-                        let mut storage_key = try!(self.serialize(key));
+                        let mut storage_key = try!(self.serialize(&key));
                         storage_key.push(0);
-                        let storage_value = try!(self.serialize(value));
+                        let storage_value = try!(self.serialize(&value));
                         self.side_effector.store(&storage_key[..], &storage_value[..]);
                         Ok(Noun::from_bool(true))
                     } else {
@@ -203,7 +250,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 }
                 RETRIEVE_BY_KEY => {
                     let key = try!(self.eval_on(subject.clone(), argument));
-                    let key_bytes = try!(self.serialize(key));
+                    let key_bytes = try!(self.serialize(&key));
                     self.retrieve_with_tag(subject, key_bytes, 0)
                 }
                 RANDOM => {
@@ -227,6 +274,61 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         Err(EvalError::BadArgument)
                     }
                 }
+                GENERATE_KEYPAIR => {
+                    let provided_seed = self.eval_on(subject, argument)?;
+                    let mut random_seed = vec![0u8; 32];
+                    self.side_effector.random(&mut random_seed[..]);
+                    let public = Noun::new_cell(
+                        provided_seed,
+                        Noun::from_vec(random_seed)
+                    );
+                    let private = Noun::from_slice(&self.private_symmetric_key_for(&public, false)?[..]);
+                    Ok(Noun::new_cell(private, public))
+                }
+                SYMMETRIC_EXUSIGN => {
+                    let (public_key, request_ciphertext) = double_arg(self.eval_on(subject.clone(), argument)?)?;
+                    let private_key = self.private_symmetric_key_for(&public_key, false)?;
+
+                    // Decryption
+                    let program = {
+                        let request_ciphertext_bytes = bytes_arg(&request_ciphertext)?;
+                        if request_ciphertext_bytes.len() < SYMMETRIC_NONCE_LEN + SYMMETRIC_TAG_LEN {
+                            return Err(EvalError::DecryptionFailed);
+                        }
+                        let nonce = &request_ciphertext_bytes[0..SYMMETRIC_NONCE_LEN];
+                        let tag = &request_ciphertext_bytes[SYMMETRIC_NONCE_LEN..SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN];
+                        let decryption_ciphertext = &request_ciphertext_bytes[SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN..];
+
+                        let mut decryptor = ChaCha20Poly1305::new(&private_key[..], &nonce[..], &[][..]);
+                        let mut plaintext_buffer = vec![0u8; decryption_ciphertext.len()];
+                        if !decryptor.decrypt(request_ciphertext_bytes, &mut plaintext_buffer[..], &tag[..]) {
+                            return Err(EvalError::DecryptionFailed);
+                        }
+                        try!(deserialize(&plaintext_buffer[..]).map_err(|_| EvalError::DecryptionFailed))
+                    };
+
+                    // Evaluation
+                    let result = try!(self.eval_on(subject, program));
+
+                    // Encryption
+                    {
+                        let result_buffer = try!(self.serialize(&result));
+
+                        let mut serialized = vec![0u8; SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN + result_buffer.len()];
+                        {
+                            let (nonce, rest) = serialized.split_at_mut(SYMMETRIC_NONCE_LEN);
+                            let (tag, ciphertext) = rest.split_at_mut(SYMMETRIC_TAG_LEN);
+
+                            self.side_effector.random(&mut nonce[..]);
+
+                            let mut encryptor = ChaCha20Poly1305::new(&private_key[..], &nonce[..], &[][..]);
+
+                            encryptor.encrypt(&result_buffer[..], ciphertext, tag);
+                        }
+
+                        Ok(Noun::from_vec(serialized))
+                    }
+                }
                 //11 => { // send
                 //    if let Some((b, c, d)) =
                 //}
@@ -236,8 +338,8 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
         }
     }
 
-    fn serialize(&mut self, noun: Noun) -> Result<Vec<u8>, EvalError> {
-        match serialize::serialize(&noun, 1_000_000) {
+    fn serialize(&mut self, noun: &Noun) -> Result<Vec<u8>, EvalError> {
+        match serialize::serialize(noun, 1_000_000) {
             Ok(x) => Ok(x),
             Err(SerializationError::OverlongAtom) => Err(EvalError::BadArgument),
             Err(SerializationError::MaximumLengthExceeded) => Err(EvalError::MemoryExceeded),
@@ -302,6 +404,9 @@ mod test {
             self.storage.insert(key.into(), value.into());
         }
         fn send(&mut self, _destination: &[u8; 32], _message: &[u8], _local_cost: u64) {
+        }
+        fn secret(&self) -> &[u8; 32] {
+            b"this is a thirty-two byte secret"
         }
     }
 
@@ -452,14 +557,14 @@ mod test {
         // I do want to catch leaving this uninitialized somehow.
         assert!(buf[0] != buf[1] || buf[1] != buf[2]);
     }
-    
+
     fn hash<T: AsNoun>(x: T) -> Noun {
         let buffer = serialize::serialize(&x.as_noun(), 100000).expect("hash serialization failed");
         let mut result = [0u8; 64];
         Blake2b::blake2b(&mut result[..], &buffer, &[][..]);
         Noun::from_slice(&result[..])
     }
-    
+
     fn iterate_hash(rounds: usize) -> Noun {
         let mut x = Noun::from_u8(0);
         for _ in 0..rounds {
@@ -467,16 +572,16 @@ mod test {
         }
         x
     }
-    
+
     #[test]
     fn guessing_game() {
-        
+
         let rightleftleft = 12;
         let rightleftright = 13;
         let rightright = 7;
         let left = 2;
         let rightleft = 6;
-        
+
         let f = (IF, (IS_EQUAL, (AXIS, rightleftleft), (AXIS, rightleftright)),
             (LITERAL, &b"correct"[..]),
             (IF, (IS_EQUAL, (AXIS, rightleftleft), (AXIS, rightright)),
@@ -499,9 +604,9 @@ mod test {
               (LITERAL, 0)
             )
         ).as_noun();
-        
+
         let runner = (COMPOSE, make_context_and_data, (RECURSE, (AXIS, 1), (AXIS, 2))).as_noun();
-        
+
         expect_eval((iterate_hash(44), runner.clone()), &b"too big"[..]);
         expect_eval((iterate_hash(6), runner.clone()), &b"too small"[..]);
         expect_eval((iterate_hash(42), runner.clone()), &b"correct"[..]);

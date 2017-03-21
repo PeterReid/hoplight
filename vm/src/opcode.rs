@@ -14,3 +14,5 @@ pub const RETRIEVE_BY_HASH: u8 = 12;
 pub const STORE_BY_KEY: u8 = 13;
 pub const RETRIEVE_BY_KEY: u8 = 14;
 pub const RANDOM: u8 = 15;
+pub const GENERATE_KEYPAIR: u8 = 16;
+pub const SYMMETRIC_EXUSIGN: u8 = 17;
