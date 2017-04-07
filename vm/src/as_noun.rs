@@ -16,9 +16,21 @@ impl AsNoun for u8 {
     }
 }
 
+impl AsNoun for bool {
+    fn as_noun(self) -> Noun {
+        Noun::from_bool(self)
+    }
+}
+
 impl<'a> AsNoun for &'a [u8] {
     fn as_noun(self) -> Noun {
         Noun::from_slice(self)
+    }
+}
+
+impl<'a> AsNoun for Vec<u8> {
+    fn as_noun(self) -> Noun {
+        Noun::from_vec(self)
     }
 }
 

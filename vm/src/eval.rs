@@ -51,6 +51,16 @@ fn bytes_arg(noun: &Noun) -> Result<&[u8], EvalError> {
         Err(EvalError::BadArgument)
     }
 }
+fn key_arg(noun: &Noun) -> Result<[u8; 32], EvalError> {
+    let bytes = bytes_arg(noun)?;
+    let mut key = [0u8; 32];
+    if bytes.len() == 32 {
+        key.copy_from_slice(bytes);
+        Ok(key)
+    } else {
+        Err(EvalError::BadArgument)
+    }
+}
 
 
 pub type EvalResult = Result<Noun, EvalError>;
@@ -78,7 +88,6 @@ impl From<CostError> for EvalError {
 const SYMMETRIC_NONCE_LEN: usize = 8;
 const SYMMETRIC_TAG_LEN: usize = 16;
 
-
 impl<'a, S: SideEffectEngine> Computation<'a, S> {
     pub fn retrieve_with_tag(&mut self, subject: Noun, mut key: Vec<u8>, tag: u8) -> Result<Noun, EvalError> {
         key.push(tag);
@@ -95,14 +104,16 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
         }
     }
 
+    /// TODO: This description is not very precise:
     /// The private key corresponding to an atom is only computable by the secret holder.
     /// the private key corresponding to a cell is computable by anyone, given knownledge
     /// of the private key of its right child.
-    fn private_symmetric_key_for(&mut self, public: &Noun, branched_right: bool) -> Result<[u8; 64], EvalError> {
+    fn private_symmetric_key_for(&mut self, public: &Noun, branched_right: bool) -> Result<[u8; 32], EvalError> {
         match public.as_kind() {
             NounKind::Atom(xs) => {
                 self.ticks_remaining.incur(xs.len() as u64)?;
-                let mut result = [0u8; 64];
+                let mut result = [0u8; 32];
+
                 Blake2b::blake2b(&mut result[..], &xs,
                     if branched_right {
                         &self.side_effector.secret()[..]
@@ -115,14 +126,54 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                 self.ticks_remaining.incur(128)?;
                 let left_hash = self.private_symmetric_key_for(left, false)?;
                 let right_hash = self.private_symmetric_key_for(right, true)?;
-                let mut hasher = Blake2b::new(64);
+                let mut hasher = Blake2b::new(32);
                 hasher.input(&left_hash[..]);
                 hasher.input(&right_hash[..]);
-                let mut output = [0u8; 64];
+                let mut output = [0u8; 32];
                 hasher.result(&mut output[..]);
                 Ok(output)
             }
         }
+    }
+
+    pub fn decrypt(&mut self, key: &[u8; 32], ciphertext: &[u8]) -> Result<Option<Noun>, EvalError> {
+        if ciphertext.len() < SYMMETRIC_NONCE_LEN + SYMMETRIC_TAG_LEN {
+            return Ok(None);
+        }
+        let nonce = &ciphertext[0..SYMMETRIC_NONCE_LEN];
+        let tag = &ciphertext[SYMMETRIC_NONCE_LEN..SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN];
+        let decryption_ciphertext = &ciphertext[SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN..];
+
+        try!(self.ticks_remaining.incur(ciphertext.len() as u64));
+
+        let mut decryptor = ChaCha20Poly1305::new(&key[..], &nonce[..], &[][..]);
+        let mut plaintext_buffer = vec![0u8; decryption_ciphertext.len()];
+        if !decryptor.decrypt(decryption_ciphertext, &mut plaintext_buffer[..], &tag[..]) {
+            return Ok(None);
+        }
+
+        Ok(match deserialize(&plaintext_buffer[..]) {
+            Err(_) => None,
+            Ok(result) => Some(result)
+        })
+    }
+
+    pub fn encrypt(&mut self, key: &[u8; 32], plaintext: &Noun) -> EvalResult {
+        let result_buffer = try!(self.serialize(&plaintext));
+
+        let mut serialized = vec![0u8; SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN + result_buffer.len()];
+        {
+            let (nonce, rest) = serialized.split_at_mut(SYMMETRIC_NONCE_LEN);
+            let (tag, ciphertext) = rest.split_at_mut(SYMMETRIC_TAG_LEN);
+
+            self.side_effector.random(&mut nonce[..]);
+
+            let mut encryptor = ChaCha20Poly1305::new(&key[..], &nonce[..], &[][..]);
+
+            encryptor.encrypt(&result_buffer[..], ciphertext, tag);
+        }
+
+        Ok(Noun::from_vec(serialized))
     }
 
     pub fn eval_on(&mut self, mut subject: Noun, mut formula: Noun) -> EvalResult {
@@ -285,49 +336,34 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     let private = Noun::from_slice(&self.private_symmetric_key_for(&public, false)?[..]);
                     Ok(Noun::new_cell(private, public))
                 }
+                DECRYPT => {
+                    let (private_key, ciphertext) = double_arg(self.eval_on(subject, argument)?)?;
+
+                    if let Some(plaintext) = self.decrypt(&key_arg(&private_key)?, bytes_arg(&ciphertext)?)? {
+                        Ok(Noun::new_cell(Noun::from_bool(true), plaintext))
+                    } else {
+                        Ok(Noun::from_bool(false))
+                    }
+                }
+                ENCRYPT => {
+                    let (private_key, plaintext) = double_arg(self.eval_on(subject, argument)?)?;
+                    self.encrypt(&key_arg(&private_key)?, &plaintext)
+                }
                 SYMMETRIC_EXUSIGN => {
                     let (public_key, request_ciphertext) = double_arg(self.eval_on(subject.clone(), argument)?)?;
                     let private_key = self.private_symmetric_key_for(&public_key, false)?;
 
                     // Decryption
-                    let program = {
-                        let request_ciphertext_bytes = bytes_arg(&request_ciphertext)?;
-                        if request_ciphertext_bytes.len() < SYMMETRIC_NONCE_LEN + SYMMETRIC_TAG_LEN {
-                            return Err(EvalError::DecryptionFailed);
-                        }
-                        let nonce = &request_ciphertext_bytes[0..SYMMETRIC_NONCE_LEN];
-                        let tag = &request_ciphertext_bytes[SYMMETRIC_NONCE_LEN..SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN];
-                        let decryption_ciphertext = &request_ciphertext_bytes[SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN..];
-
-                        let mut decryptor = ChaCha20Poly1305::new(&private_key[..], &nonce[..], &[][..]);
-                        let mut plaintext_buffer = vec![0u8; decryption_ciphertext.len()];
-                        if !decryptor.decrypt(request_ciphertext_bytes, &mut plaintext_buffer[..], &tag[..]) {
-                            return Err(EvalError::DecryptionFailed);
-                        }
-                        try!(deserialize(&plaintext_buffer[..]).map_err(|_| EvalError::DecryptionFailed))
+                    let program = if let Some(program) = self.decrypt(&private_key, bytes_arg(&request_ciphertext)?)? {
+                        program
+                    } else {
+                        return Ok(Noun::from_bool(false));
                     };
 
                     // Evaluation
                     let result = try!(self.eval_on(subject, program));
 
-                    // Encryption
-                    {
-                        let result_buffer = try!(self.serialize(&result));
-
-                        let mut serialized = vec![0u8; SYMMETRIC_NONCE_LEN+SYMMETRIC_TAG_LEN + result_buffer.len()];
-                        {
-                            let (nonce, rest) = serialized.split_at_mut(SYMMETRIC_NONCE_LEN);
-                            let (tag, ciphertext) = rest.split_at_mut(SYMMETRIC_TAG_LEN);
-
-                            self.side_effector.random(&mut nonce[..]);
-
-                            let mut encryptor = ChaCha20Poly1305::new(&private_key[..], &nonce[..], &[][..]);
-
-                            encryptor.encrypt(&result_buffer[..], ciphertext, tag);
-                        }
-
-                        Ok(Noun::from_vec(serialized))
-                    }
+                    Ok(Noun::new_cell(Noun::from_bool(true), self.encrypt(&private_key, &result)?))
                 }
                 //11 => { // send
                 //    if let Some((b, c, d)) =
@@ -610,5 +646,27 @@ mod test {
         expect_eval((iterate_hash(44), runner.clone()), &b"too big"[..]);
         expect_eval((iterate_hash(6), runner.clone()), &b"too small"[..]);
         expect_eval((iterate_hash(42), runner.clone()), &b"correct"[..]);
+    }
+
+    #[test]
+    fn encrypt_decrypt() {
+        let key: Vec<u8> = (4..36).collect();
+        assert!(key.len() == 32);
+        expect_eval(
+            (key, DECRYPT, (AXIS, 1), (ENCRYPT, (AXIS, 1), (LITERAL, 21))),
+            (true, 21)
+            );
+    }
+
+    #[test]
+    fn encrypt_decrypt_key_mismatch() {
+        let key_one: Vec<u8> = (4..36).collect();
+        let key_two: Vec<u8> = (104..136).collect();
+        assert!(key_one.len() == 32);
+        assert!(key_two.len() == 32);
+        expect_eval(
+            (key_one, DECRYPT, (LITERAL, key_two), (ENCRYPT, (AXIS, 1), (LITERAL, 21))),
+            false
+            );
     }
 }
