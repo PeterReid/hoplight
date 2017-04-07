@@ -17,4 +17,4 @@ pub const RANDOM: u8 = 15;
 pub const GENERATE_KEYPAIR: u8 = 16;
 pub const ENCRYPT: u8 = 17;
 pub const DECRYPT: u8 = 18;
-pub const SYMMETRIC_EXUSIGN: u8 = 19;
+pub const EXUCRYPT: u8 = 19;

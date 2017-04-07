@@ -349,7 +349,7 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     let (private_key, plaintext) = double_arg(self.eval_on(subject, argument)?)?;
                     self.encrypt(&key_arg(&private_key)?, &plaintext)
                 }
-                SYMMETRIC_EXUSIGN => {
+                EXUCRYPT => {
                     let (public_key, request_ciphertext) = double_arg(self.eval_on(subject.clone(), argument)?)?;
                     let private_key = self.private_symmetric_key_for(&public_key, false)?;
 
