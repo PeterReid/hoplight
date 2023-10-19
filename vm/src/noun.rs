@@ -1,12 +1,12 @@
-use std::cmp::{Eq, PartialEq};
-use std::rc::Rc;
-use checked_int_cast::CheckedIntCast;
-use std::ops::Deref;
 use byteorder::{ByteOrder, LittleEndian};
+use checked_int_cast::CheckedIntCast;
+use std::cmp::{Eq, PartialEq};
+use std::ops::Deref;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub enum Noun {
-    SmallAtom{value: [u8; 4], length: u8},
+    SmallAtom { value: [u8; 4], length: u8 },
     Atom(Rc<Vec<u8>>),
     Cell(Rc<Noun>, Rc<Noun>),
 }
@@ -19,10 +19,19 @@ pub enum NounKind<'a> {
 impl PartialEq for Noun {
     fn eq(&self, other: &Noun) -> bool {
         match (self, other) {
-            (&Noun::Cell(ref a, ref b), &Noun::Cell(ref x, ref y)) => a==x && b==y,
-            (&Noun::SmallAtom{value:value_a, length:length_a}, &Noun::SmallAtom{value:value_b, length:length_b}) => (value_a,length_a)==(value_b,length_b),
-            (&Noun::Atom(ref a), &Noun::Atom(ref x)) => a==x,
-            _ => false // Nouns that can be SmallAtoms will be SmallAtoms. Doing otherwise would complicate constant-time guarantees.
+            (&Noun::Cell(ref a, ref b), &Noun::Cell(ref x, ref y)) => a == x && b == y,
+            (
+                &Noun::SmallAtom {
+                    value: value_a,
+                    length: length_a,
+                },
+                &Noun::SmallAtom {
+                    value: value_b,
+                    length: length_b,
+                },
+            ) => (value_a, length_a) == (value_b, length_b),
+            (&Noun::Atom(ref a), &Noun::Atom(ref x)) => a == x,
+            _ => false, // Nouns that can be SmallAtoms will be SmallAtoms. Doing otherwise would complicate constant-time guarantees.
         }
     }
 }
@@ -51,7 +60,10 @@ impl Noun {
     }
 
     pub fn from_u8(source: u8) -> Noun {
-        Noun::SmallAtom{value: [source, 0, 0, 0], length: 1}
+        Noun::SmallAtom {
+            value: [source, 0, 0, 0],
+            length: 1,
+        }
     }
 
     pub fn equal(&self, other: &Noun) -> Noun {
@@ -70,7 +82,9 @@ impl Noun {
     pub fn as_usize(&self) -> Option<usize> {
         match self {
             &Noun::Cell(_, _) => None,
-            &Noun::SmallAtom{value, length: _} => LittleEndian::read_u32(&value[..]).as_usize_checked(),
+            &Noun::SmallAtom { value, length: _ } => {
+                LittleEndian::read_u32(&value[..]).as_usize_checked()
+            }
             &Noun::Atom(ref xs) => {
                 let mut shift = 0u8;
                 let mut accum: usize = 0;
@@ -93,7 +107,9 @@ impl Noun {
     pub fn as_u8(&self) -> Option<u8> {
         match self {
             &Noun::Cell(_, _) => None,
-            &Noun::SmallAtom{value, length:_} => LittleEndian::read_u32(&value[..]).as_u8_checked(),
+            &Noun::SmallAtom { value, length: _ } => {
+                LittleEndian::read_u32(&value[..]).as_u8_checked()
+            }
             &Noun::Atom(ref xs) => {
                 if xs.len() > 1 {
                     for x in &xs[1..] {
@@ -109,14 +125,14 @@ impl Noun {
     }
 
     fn from_small_slice(source: &[u8]) -> Noun {
-        Noun::SmallAtom{
+        Noun::SmallAtom {
             length: source.len() as u8,
             value: [
                 source.get(0).map(|x| *x).unwrap_or(0),
                 source.get(1).map(|x| *x).unwrap_or(0),
                 source.get(2).map(|x| *x).unwrap_or(0),
-                source.get(3).map(|x| *x).unwrap_or(0)
-            ]
+                source.get(3).map(|x| *x).unwrap_or(0),
+            ],
         }
     }
 
@@ -138,57 +154,47 @@ impl Noun {
 
     pub fn atom_len(&self) -> Option<usize> {
         match self {
-            &Noun::SmallAtom{value: _, length} => {
-                Some(length as usize)
-            }
-            &Noun::Atom(ref xs) => {
-                Some(xs.len())
-            }
-            &Noun::Cell(_, _) => {
-                None
-            }
+            &Noun::SmallAtom { value: _, length } => Some(length as usize),
+            &Noun::Atom(ref xs) => Some(xs.len()),
+            &Noun::Cell(_, _) => None,
         }
     }
 
     pub fn as_kind<'a>(&'a self) -> NounKind<'a> {
         match self {
-            &Noun::SmallAtom{ref value, length} => {
-                NounKind::Atom(&value[0..length as usize])
-            }
+            &Noun::SmallAtom { ref value, length } => NounKind::Atom(&value[0..length as usize]),
             &Noun::Atom(ref xs) => {
                 //let ys: &'a Rc<Vec<u8>> = xs;
                 NounKind::Atom(&xs)
             }
-            &Noun::Cell(ref a, ref b) => {
-                NounKind::Cell(a, b)
-            }
+            &Noun::Cell(ref a, ref b) => NounKind::Cell(a, b),
         }
     }
 
     pub fn is_cell(&self) -> bool {
         match self {
             &Noun::Cell(_, _) => true,
-            _ => false
+            _ => false,
         }
     }
 
     pub fn as_cell(&self) -> Option<(&Noun, &Noun)> {
         match self {
             &Noun::Cell(ref a, ref b) => Some((a, b)),
-            _ => None
+            _ => None,
         }
     }
 
     pub fn into_cell(self) -> Option<(Noun, Noun)> {
         match self {
             Noun::Cell(a, b) => Some((own(a), own(b))),
-            _ => None
+            _ => None,
         }
     }
 
     pub fn as_byte(&self) -> Option<u8> {
         match self {
-            &Noun::SmallAtom{value, length: _} => {
+            &Noun::SmallAtom { value, length: _ } => {
                 if value[1] == 0 && value[2] == 0 && value[3] == 0 {
                     Some(value[0])
                 } else {
@@ -196,23 +202,19 @@ impl Noun {
                 }
             }
             &Noun::Atom(ref xs) => {
-                if (&xs[1..]).iter().position(|x| *x!=0).is_some() {
+                if (&xs[1..]).iter().position(|x| *x != 0).is_some() {
                     return None;
                 }
 
                 Some(xs.get(0).map(|x| *x).unwrap_or(0))
             }
-            _ => {
-                None
-            }
+            _ => None,
         }
     }
 
     pub fn into_vec(self) -> Option<Vec<u8>> {
         match self {
-            Noun::SmallAtom{value, length} => {
-                Some(value[0..length as usize].to_vec())
-            }
+            Noun::SmallAtom { value, length } => Some(value[0..length as usize].to_vec()),
             Noun::Atom(xs) => Some(own_vec(xs)),
             Noun::Cell(_, _) => None,
         }
@@ -223,17 +225,17 @@ impl ::std::fmt::Debug for Noun {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
         match self {
             &Noun::Cell(ref a, ref b) => write!(f, "[{:?} {:?}]", a, b),
-            &Noun::SmallAtom{value, length} => {
+            &Noun::SmallAtom { value, length } => {
                 for byte in value[..length as usize].iter() {
-                    try!(write!(f, "{:02x}", *byte));
+                    write!(f, "{:02x}", *byte)?;
                 }
-                Ok( () )
+                Ok(())
             }
             &Noun::Atom(ref a) => {
                 for byte in a.iter() {
-                    try!(write!(f, "{:02x}", *byte));
+                    write!(f, "{:02x}", *byte)?;
                 }
-                Ok( () )
+                Ok(())
             }
         }
     }

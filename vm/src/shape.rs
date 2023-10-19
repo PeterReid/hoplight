@@ -1,7 +1,7 @@
 use noun::{Noun, NounKind};
-use std::io::{self, Read, Cursor};
-use ticks::Ticks;
+use std::io::{self, Cursor, Read};
 use std::mem::size_of;
+use ticks::Ticks;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum ShapeError {
@@ -9,20 +9,33 @@ pub enum ShapeError {
     DataTooShort,
 }
 
-fn populate_structure<R: Read>(structure: &Noun, data_source: &mut R, allocation_bound: &mut Ticks) -> Result<Noun, ShapeError> {
-    try!(allocation_bound.incur(size_of::<Noun>() as u64).map_err(|_| ShapeError::AllocationBoundExceeded));
+fn populate_structure<R: Read>(
+    structure: &Noun,
+    data_source: &mut R,
+    allocation_bound: &mut Ticks,
+) -> Result<Noun, ShapeError> {
+    allocation_bound
+        .incur(size_of::<Noun>() as u64)
+        .map_err(|_| ShapeError::AllocationBoundExceeded)?;
 
     if let Some((left, right)) = structure.as_cell() {
         return Ok(Noun::new_cell(
-            try!(populate_structure(left, data_source, allocation_bound)),
-            try!(populate_structure(right, data_source, allocation_bound)) ));
+            populate_structure(left, data_source, allocation_bound)?,
+            populate_structure(right, data_source, allocation_bound)?,
+        ));
     }
 
-    let expected_count = try!(structure.as_usize().ok_or(ShapeError::AllocationBoundExceeded));
-    try!(allocation_bound.incur(expected_count as u64).map_err(|_| ShapeError::AllocationBoundExceeded));
+    let expected_count = structure
+        .as_usize()
+        .ok_or(ShapeError::AllocationBoundExceeded)?;
+    allocation_bound
+        .incur(expected_count as u64)
+        .map_err(|_| ShapeError::AllocationBoundExceeded)?;
 
     let mut xs = vec![0u8; expected_count];
-    try!(data_source.read_exact(&mut xs[..]).map_err(|_| ShapeError::DataTooShort));
+    data_source
+        .read_exact(&mut xs[..])
+        .map_err(|_| ShapeError::DataTooShort)?;
 
     Ok(Noun::from_vec(xs))
 }
@@ -48,10 +61,10 @@ impl<'a> Read for NounReader<'a> {
         loop {
             while self.current_node.is_none() {
                 let mut stack_top: &'a Noun = if let Some(stack_top) = self.stack.pop() {
-                        stack_top
-                    } else {
-                        return Ok(0);
-                    };
+                    stack_top
+                } else {
+                    return Ok(0);
+                };
 
                 loop {
                     match stack_top.as_kind() {
@@ -70,9 +83,11 @@ impl<'a> Read for NounReader<'a> {
             }
 
             if let Some(ref mut cursor) = self.current_node {
-                let read_count = try!(cursor.read(buf));
+                let read_count = cursor.read(buf)?;
                 if read_count > 0 {
-                    try!(self.ticks.incur(read_count as u64).map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "cost exceeded")));
+                    self.ticks
+                        .incur(read_count as u64)
+                        .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "cost exceeded"))?;
                     return Ok(read_count);
                 }
             }
@@ -81,51 +96,81 @@ impl<'a> Read for NounReader<'a> {
     }
 }
 
-pub fn shape(data: &Noun, structure: &Noun, ticks: &mut Ticks, allocation_bound: usize) -> Result<Noun, ShapeError> {
-    populate_structure(structure, &mut NounReader::new(data, ticks), &mut Ticks::new(allocation_bound as u64))
+pub fn shape(
+    data: &Noun,
+    structure: &Noun,
+    ticks: &mut Ticks,
+    allocation_bound: usize,
+) -> Result<Noun, ShapeError> {
+    populate_structure(
+        structure,
+        &mut NounReader::new(data, ticks),
+        &mut Ticks::new(allocation_bound as u64),
+    )
 }
 
 #[cfg(test)]
 mod test {
-    use as_noun::AsNoun;
     use super::{shape, ShapeError};
-    use ticks::Ticks;
+    use as_noun::AsNoun;
     use noun::Noun;
+    use ticks::Ticks;
 
     fn testcase<D: AsNoun, S: AsNoun, R: AsNoun>(data: D, structure: S, expected_result: R) {
         assert_eq!(
-            shape(&data.as_noun(), &structure.as_noun(), &mut Ticks::new(1_000_000), 1_000_000),
+            shape(
+                &data.as_noun(),
+                &structure.as_noun(),
+                &mut Ticks::new(1_000_000),
+                1_000_000
+            ),
             Ok(expected_result.as_noun())
         )
     }
 
     fn is_malformed<D: AsNoun, S: AsNoun>(data: D, structure: S, error: ShapeError) {
-        assert_eq!(shape(&data.as_noun(), &structure.as_noun(), &mut Ticks::new(1_000_000), 1_000_000), Err(error));
+        assert_eq!(
+            shape(
+                &data.as_noun(),
+                &structure.as_noun(),
+                &mut Ticks::new(1_000_000),
+                1_000_000
+            ),
+            Err(error)
+        );
     }
 
     #[test]
     fn cut() {
-        testcase(&[1,2,3,4,5][..], (2, 3), (&[1,2][..], &[3,4,5][..]));
+        testcase(&[1, 2, 3, 4, 5][..], (2, 3), (&[1, 2][..], &[3, 4, 5][..]));
     }
 
     #[test]
     fn join() {
-        testcase((&[1,2][..], &[3,4,5][..]), 5, &[1,2,3,4,5][..]);
+        testcase((&[1, 2][..], &[3, 4, 5][..]), 5, &[1, 2, 3, 4, 5][..]);
     }
 
     #[test]
     fn join_with_empty() {
-        testcase((&[1,2][..], &[][..], &[3,4,5][..], &[][..]), 5, &[1,2,3,4,5][..]);
+        testcase(
+            (&[1, 2][..], &[][..], &[3, 4, 5][..], &[][..]),
+            5,
+            &[1, 2, 3, 4, 5][..],
+        );
     }
 
     #[test]
     fn rearrange() {
-        testcase((&[1,2][..], &[3,4,5][..]), (3, 2), (&[1,2,3][..], &[4,5][..]));
+        testcase(
+            (&[1, 2][..], &[3, 4, 5][..]),
+            (3, 2),
+            (&[1, 2, 3][..], &[4, 5][..]),
+        );
     }
 
     #[test]
     fn too_short_input() {
-        is_malformed((&[1,2][..], &[3,4,5][..]), 6, ShapeError::DataTooShort);
+        is_malformed((&[1, 2][..], &[3, 4, 5][..]), 6, ShapeError::DataTooShort);
     }
 
     #[test]
@@ -135,6 +180,10 @@ mod test {
             x = Noun::new_cell(x.clone(), x.clone());
         }
 
-        is_malformed(x, Noun::from_usize_compact(2_000_000), ShapeError::AllocationBoundExceeded);
+        is_malformed(
+            x,
+            Noun::from_usize_compact(2_000_000),
+            ShapeError::AllocationBoundExceeded,
+        );
     }
 }
