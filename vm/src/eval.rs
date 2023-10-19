@@ -67,7 +67,7 @@ pub type EvalResult = Result<Noun, EvalError>;
 
 pub trait SideEffectEngine {
     fn nearest_neighbor(&mut self, near: &[u8; 32]) -> [u8; 32];
-    fn random(&mut self, &mut [u8]);
+    fn random(&mut self, _: &mut [u8]);
     fn load(&mut self, key: &[u8]) -> Option<Vec<u8>>;
     fn store(&mut self, key: &[u8], value: &[u8]);
     fn send(&mut self, destination: &[u8; 32], message: &[u8], local_cost: u64);

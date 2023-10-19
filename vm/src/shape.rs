@@ -28,7 +28,7 @@ fn populate_structure<R: Read>(structure: &Noun, data_source: &mut R, allocation
 }
 
 pub struct NounReader<'a> {
-    current_node: Option<Cursor<(&'a [u8])>>,
+    current_node: Option<Cursor<&'a [u8]>>,
     stack: Vec<&'a Noun>,
     ticks: &'a mut Ticks,
 }
