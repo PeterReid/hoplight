@@ -7,4 +7,3 @@ authors = ["Peter Reid <peter.d.reid@gmail.com>"]
 checked_int_cast = "1.0.0"
 rust-crypto = "*"
 chacha = "0.1.0"
-byteorder = "1.0.0"

@@ -1,7 +1,6 @@
 extern crate checked_int_cast;
 extern crate crypto;
 extern crate chacha;
-extern crate byteorder;
 
 mod axis;
 mod eval;
