@@ -1,4 +1,4 @@
-use checked_int_cast::CheckedIntCast;
+use std::convert::TryInto;
 use std::cmp::{Eq, PartialEq};
 use std::ops::Deref;
 use std::rc::Rc;
@@ -82,7 +82,7 @@ impl Noun {
         match self {
             &Noun::Cell(_, _) => None,
             &Noun::SmallAtom { value, length: _ } => {
-                u32::from_le_bytes(value).as_usize_checked()
+                u32::from_le_bytes(value).try_into().ok()
             }
             &Noun::Atom(ref xs) => {
                 let mut shift = 0u8;
@@ -107,7 +107,7 @@ impl Noun {
         match self {
             &Noun::Cell(_, _) => None,
             &Noun::SmallAtom { value, length: _ } => {
-                u32::from_le_bytes(value).as_u8_checked()
+                u32::from_le_bytes(value).try_into().ok()
             }
             &Noun::Atom(ref xs) => {
                 if xs.len() > 1 {
