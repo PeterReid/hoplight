@@ -226,7 +226,7 @@ impl ::std::fmt::Debug for Noun {
         match self {
             &Noun::Cell(ref a, ref b) => write!(f, "[{:?} {:?}]", a, b),
             &Noun::SmallAtom { value, length } => {
-                if length == 1 {
+                if length == 1 { // Displaying opcodes as decimal makes for cleaner rendering of code
                     return write!(f, "{}", value[0]);
                 }
                 
@@ -238,7 +238,7 @@ impl ::std::fmt::Debug for Noun {
                 Ok(())
             }
             &Noun::Atom(ref a) => {
-                if a.len() == 1 {
+                if a.len() == 1 { // Displaying opcodes as decimal makes for cleaner rendering of code
                     return write!(f, "{}", a[0]);
                 }
                 
