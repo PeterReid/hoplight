@@ -65,6 +65,7 @@ impl Noun {
         }
     }
 
+    
     pub fn equal(&self, other: &Noun) -> Noun {
         Noun::from_bool(self == other)
     }

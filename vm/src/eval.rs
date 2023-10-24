@@ -8,7 +8,7 @@ use equal::equal;
 use noun::{Noun, NounKind};
 use opcode::*;
 use serialize::{self, SerializationError};
-use shape::shape;
+use shape::{reshape, length};
 use std::convert::From;
 use ticks::{CostError, Ticks};
 
@@ -335,9 +335,9 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     self.side_effector.random(&mut xs);
                     Ok(Noun::from_vec(xs))
                 }
-                SHAPE => {
+                RESHAPE => {
                     if let Some((data, structure)) = self.eval_on(subject, argument)?.into_cell() {
-                        shape(&data, &structure, &mut self.ticks_remaining, 10_000_000)
+                        reshape(&data, &structure, &mut self.ticks_remaining, 10_000_000)
                             .map_err(|_| EvalError::BadShape)
                     } else {
                         Err(EvalError::BadArgument)
@@ -542,6 +542,8 @@ mod test {
         let hash_target = (5, 3, &b"longer atom"[..]).as_noun();
         expect_eval((hash_target.clone(), HASH, (0, 1)), hash(hash_target));
     }
+    
+    
 
     #[test]
     fn distribute() {

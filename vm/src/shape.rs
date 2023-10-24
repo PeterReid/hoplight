@@ -1,7 +1,8 @@
 use noun::{Noun, NounKind};
 use std::io::{self, Cursor, Read};
 use std::mem::size_of;
-use ticks::Ticks;
+use ticks::{CostResult, Ticks};
+
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum ShapeError {
@@ -96,7 +97,7 @@ impl<'a> Read for NounReader<'a> {
     }
 }
 
-pub fn shape(
+pub fn reshape(
     data: &Noun,
     structure: &Noun,
     ticks: &mut Ticks,
@@ -109,16 +110,32 @@ pub fn shape(
     )
 }
 
+pub fn length(
+    data: &Noun,
+    ticks: &mut Ticks
+) -> CostResult<Noun> {
+    Ok(match data.as_kind() {
+        NounKind::Atom(xs) => {
+            ticks.incur(1)?;
+            Noun::from_usize_compact(xs.len())
+        }
+        NounKind::Cell(left, right) => {
+            ticks.incur(1)?;
+            Noun::new_cell(length(left, ticks)?, length(right, ticks)?)
+        }
+    })
+}
+
 #[cfg(test)]
 mod test {
-    use super::{shape, ShapeError};
+    use super::{reshape, ShapeError};
     use as_noun::AsNoun;
     use noun::Noun;
     use ticks::Ticks;
 
     fn testcase<D: AsNoun, S: AsNoun, R: AsNoun>(data: D, structure: S, expected_result: R) {
         assert_eq!(
-            shape(
+            reshape(
                 &data.as_noun(),
                 &structure.as_noun(),
                 &mut Ticks::new(1_000_000),
@@ -130,7 +147,7 @@ mod test {
 
     fn is_malformed<D: AsNoun, S: AsNoun>(data: D, structure: S, error: ShapeError) {
         assert_eq!(
-            shape(
+            reshape(
                 &data.as_noun(),
                 &structure.as_noun(),
                 &mut Ticks::new(1_000_000),
