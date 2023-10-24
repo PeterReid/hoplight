@@ -118,7 +118,11 @@ impl<T: Iterator<Item = u8>> Iterator for Tokenizer<T> {
                     }
                 }
                 
-                Token::Atom( Noun::from_usize_compact(val).into_vec().unwrap() )
+                if val != 0 {
+                    Token::Atom( Noun::from_usize_compact(val).into_vec().unwrap() )
+                } else {
+                    Token::Atom( vec![ 0 ])
+                }
             }
             _ => Token::SyntaxError
         })

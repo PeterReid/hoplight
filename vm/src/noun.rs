@@ -226,12 +226,24 @@ impl ::std::fmt::Debug for Noun {
         match self {
             &Noun::Cell(ref a, ref b) => write!(f, "[{:?} {:?}]", a, b),
             &Noun::SmallAtom { value, length } => {
+                if length == 1 {
+                    return write!(f, "{}", value[0]);
+                }
+                
+                f.write_str("x")?;
+                
                 for byte in value[..length as usize].iter() {
                     write!(f, "{:02x}", *byte)?;
                 }
                 Ok(())
             }
             &Noun::Atom(ref a) => {
+                if a.len() == 1 {
+                    return write!(f, "{}", a[0]);
+                }
+                
+                f.write_str("x")?;
+                
                 for byte in a.iter() {
                     write!(f, "{:02x}", *byte)?;
                 }
