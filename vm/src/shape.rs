@@ -64,8 +64,9 @@ impl<'a> Read for NounReader<'a> {
                 let mut stack_top: &'a Noun = if let Some(stack_top) = self.stack.pop() {
                     stack_top
                 } else {
-                    buf.fill(0);
-                    return Ok(buf.len());
+                    return Ok( 0 );
+                    //buf.fill(0);
+                    //return Ok(buf.len());
                 };
 
                 loop {

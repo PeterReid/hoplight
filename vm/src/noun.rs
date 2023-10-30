@@ -164,10 +164,17 @@ impl Noun {
         match self {
             &Noun::SmallAtom { ref value, length } => NounKind::Atom(&value[0..length as usize]),
             &Noun::Atom(ref xs) => {
-                //let ys: &'a Rc<Vec<u8>> = xs;
                 NounKind::Atom(&xs)
             }
             &Noun::Cell(ref a, ref b) => NounKind::Cell(a, b),
+        }
+    }
+    
+    pub fn as_bytes<'a>(&'a self) -> Option<&'a [u8]> {
+        match self {
+            &Noun::SmallAtom { ref value, length } => Some(&value[0..length as usize]),
+            &Noun::Atom(ref xs) => Some(&xs),
+            &Noun::Cell(_, _) => None,
         }
     }
 

@@ -7,10 +7,12 @@ use deserialize::deserialize;
 use equal::equal;
 use noun::{Noun, NounKind};
 use opcode::*;
+use std::cmp::max;
 use serialize::{self, SerializationError};
 use shape::{reshape, length};
 use std::convert::From;
 use ticks::{CostError, Ticks};
+use math::{add, invert, less, xor};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -31,6 +33,7 @@ pub enum EvalError {
     EvalOnAtom,
     BadShape,
     DecryptionFailed,
+    NonAtomicMath,
 }
 
 fn double_arg(noun: Noun) -> Result<(Noun, Noun), EvalError> {
@@ -342,6 +345,39 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     } else {
                         Err(EvalError::BadArgument)
                     }
+                }
+                SHAPE => {
+                    let data = self.eval_on(subject, argument)?;
+                    Ok(length(&data, &mut self.ticks_remaining)?)
+                }
+                ADD => {
+                    if let Some((lhs, rhs)) = self.eval_on(subject, argument)?.into_cell() {
+                        self.ticks_remaining.incur(max(lhs.atom_len().unwrap_or(0), rhs.atom_len().unwrap_or(0)) as u64)?;
+                        add(&lhs, &rhs).ok_or(EvalError::NonAtomicMath)
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                LESS => {
+                    if let Some((lhs, rhs)) = self.eval_on(subject, argument)?.into_cell() {
+                        self.ticks_remaining.incur(max(lhs.atom_len().unwrap_or(0), rhs.atom_len().unwrap_or(0)) as u64)?;
+                        less(&lhs, &rhs).map(Noun::from_bool).ok_or(EvalError::NonAtomicMath)
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                XOR => {
+                    if let Some((lhs, rhs)) = self.eval_on(subject, argument)?.into_cell() {
+                        self.ticks_remaining.incur(max(lhs.atom_len().unwrap_or(0), rhs.atom_len().unwrap_or(0)) as u64)?;
+                        xor(&lhs, &rhs).ok_or(EvalError::NonAtomicMath)
+                    } else {
+                        Err(EvalError::BadArgument)
+                    }
+                }
+                INVERT => {
+                    let data = self.eval_on(subject, argument)?;
+                    self.ticks_remaining.incur(data.atom_len().unwrap_or(0) as u64)?;
+                    invert(&data).ok_or(EvalError::NonAtomicMath)
                 }
                 GENERATE_KEYPAIR => {
                     let provided_seed = self.eval_on(subject, argument)?;

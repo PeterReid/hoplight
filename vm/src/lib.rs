@@ -11,6 +11,7 @@ mod opcode;
 mod shape;
 mod ticks;
 mod equal;
+mod math;
 
 pub use deserialize::deserialize;
 pub use serialize::serialize;
