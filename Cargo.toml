@@ -1,3 +1,4 @@
+workspace = { members = ["lisp"] }
 [package]
 name = "hoplight"
 version = "0.1.0"
