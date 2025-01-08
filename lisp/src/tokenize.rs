@@ -1,5 +1,5 @@
 #[derive(Eq, PartialEq, Debug)]
-enum Token {
+pub enum Token {
     Literal(Vec<u8>),
     Symbol(String),
     OpenParen,
@@ -40,7 +40,7 @@ fn byte_from_hex_chars(b0: char, b1: char) -> Option<u8> {
 fn or_zero(x: Option<(usize, char)>) -> char {
     x.map(|x| x.1).unwrap_or('\0')
 }
-fn tokenize(code: &str) -> Result<Vec<Token>, String>  {
+pub fn tokenize(code: &str) -> Result<Vec<Token>, String>  {
     let mut tokens = Vec::new();
     let mut remaining_code = code.chars().enumerate().peekable();
     'char_consumer: loop {
@@ -58,7 +58,18 @@ fn tokenize(code: &str) -> Result<Vec<Token>, String>  {
                 tokens.push(Token::CloseParen);
             }
             '#' => { // Hex-encoded literal
-                 
+                let mut literal = Vec::new();
+                while is_symbol_continuation(or_zero(remaining_code.peek().map(|x| *x))) {
+                    let (digit_idx, tens_digit) = remaining_code.next().unwrap();
+                    let ones_digit = or_zero(remaining_code.next());
+                
+                    if let Some(byte) = byte_from_hex_chars(tens_digit, ones_digit) {
+                        literal.push(byte);
+                    } else {
+                        return Err(format!("Hexadecimal literal malformed at character {}", digit_idx));
+                    }
+                } 
+                tokens.push(Token::Literal(literal))
             }
             '\"' => { // String literal. The only whitespace allowed is a space.
                 let mut literal = Vec::new();
@@ -95,6 +106,11 @@ fn tokenize(code: &str) -> Result<Vec<Token>, String>  {
                 }
                 tokens.push(Token::Literal(literal));
             }
+            ';' => { // Comment, terminated by a line break
+                while remaining_code.next().unwrap_or((0, '\n')).1 != '\n' {
+
+                }
+            }
             x if is_symbol_initial(x) => {
                 let mut symbol_name = String::from(x);
                 while remaining_code.peek().map(|(_, continuation)| is_symbol_continuation(*continuation)) == Some(true) {
@@ -110,22 +126,34 @@ fn tokenize(code: &str) -> Result<Vec<Token>, String>  {
     
     Ok(tokens)
 }
+#[cfg(test)]
+mod test {
+    use super::{tokenize, Token};
 
-#[test]
-fn tokenize1() {
-    assert_eq!(tokenize("(foo)"), Ok(vec![Token::OpenParen, Token::Symbol("foo".to_string()), Token::CloseParen]));
+    #[test]
+    fn tokenize1() {
+        assert_eq!(tokenize("(foo)"), Ok(vec![Token::OpenParen, Token::Symbol("foo".to_string()), Token::CloseParen]));
+    }
+    #[test]
+    fn tokenize_str() {
+        assert_eq!(tokenize("(\"blue?\")"), Ok(vec![Token::OpenParen, Token::Literal(b"blue?".to_vec()), Token::CloseParen]));
+    }
+    #[test]
+    fn tokenize_str_hex_escape() {
+        assert_eq!(tokenize("(\"\\x01\\x02\\xff\")"), Ok(vec![Token::OpenParen, Token::Literal([1,2,255].to_vec()), Token::CloseParen]));
+    }
+    #[test]
+    fn tokenize_str_basic_escape() {
+        assert_eq!(
+            tokenize("(\"CR: \\r LF: \\n TAB: \\t QUOTE: \\\"\")"), 
+            Ok(vec![Token::OpenParen, Token::Literal(b"CR: \r LF: \n TAB: \t QUOTE: \"".to_vec()), Token::CloseParen]));
+    }
+    #[test]
+    fn tokenize_hex() {
+        assert_eq!(tokenize("#1234ffbc #3456"), Ok(vec!(Token::Literal([0x12, 0x34, 0xff, 0xbc].to_vec()), Token::Literal([0x34, 0x56].to_vec()))));
+    }
+    #[test]
+    fn tokenize_comment() {
+        assert_eq!(tokenize("foo ; comment here\nbar"), Ok(vec!(Token::Symbol("foo".to_string()), Token::Symbol("bar".to_string()))));
+    }
 }
-#[test]
-fn tokenize_str() {
-    assert_eq!(tokenize("(\"blue?\")"), Ok(vec![Token::OpenParen, Token::Literal(b"blue?".to_vec()), Token::CloseParen]));
-}
-#[test]
-fn tokenize_str_hex_escape() {
-    assert_eq!(tokenize("(\"\\x01\\x02\\xff\")"), Ok(vec![Token::OpenParen, Token::Literal([1,2,255].to_vec()), Token::CloseParen]));
-}
-
-#[test]
-fn tokenize_str_basic_escape() {
-    assert_eq!(tokenize("(\"CR: \\r LF: \\n TAB: \\t QUOTE: \\\"\")"), Ok(vec![Token::OpenParen, Token::Literal(b"CR: \r LF: \n TAB: \t QUOTE: \"".to_vec()), Token::CloseParen]));
-}
-
