@@ -7,7 +7,7 @@ mod noun;
 mod as_noun;
 mod serialize;
 mod deserialize;
-mod opcode;
+pub mod opcode;
 mod shape;
 mod ticks;
 mod equal;
@@ -20,3 +20,6 @@ pub use noun::NounKind;
 pub use as_noun::AsNoun;
 pub use eval::eval;
 pub use eval::SideEffectEngine;
+
+pub use eval::eval_simple;
+

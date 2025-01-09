@@ -5,4 +5,4 @@ authors = ["Peter Reid <peter.d.reid@gmail.com>"]
 
 [dependencies]
 rust-crypto = "*"
-chacha = "0.1.0"
+chacha = "0.4.0"

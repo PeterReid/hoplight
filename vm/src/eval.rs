@@ -13,6 +13,9 @@ use shape::{reshape, length};
 use std::convert::From;
 use ticks::{CostError, Ticks};
 use math::{add, invert, less, xor};
+use as_noun::AsNoun;
+use chacha::{ChaCha, KeyStream};
+use std::collections::HashMap;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -458,78 +461,78 @@ pub fn eval<S: SideEffectEngine>(
     }
 }
 
+struct TestSideEffectEngine {
+    storage: HashMap<Vec<u8>, Vec<u8>>,
+    rng: ChaCha,
+}
+
+impl TestSideEffectEngine {
+    fn new() -> TestSideEffectEngine {
+	TestSideEffectEngine {
+	    storage: HashMap::new(),
+	    rng: ChaCha::new_chacha20(&[1u8; 32], &[0u8; 8]),
+	}
+    }
+}
+
+impl SideEffectEngine for TestSideEffectEngine {
+    fn nearest_neighbor(&mut self, _near: &[u8; 32]) -> [u8; 32] {
+	[0u8; 32]
+    }
+    fn random(&mut self, dest: &mut [u8]) {
+	for b in dest.iter_mut() {
+	    *b = 0;
+	}
+	self.rng.xor_read(dest).expect("RNG end reached");
+    }
+    //fn expected_storage_return(&mut self, storage_signing_key: &[u8; 32]) -> u64 { // guess of how much it will pay
+    //    0
+    //}
+    fn load(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+	self.storage.get(key).cloned()
+    }
+    fn store(&mut self, key: &[u8], value: &[u8]) {
+	self.storage.insert(key.into(), value.into());
+    }
+    fn send(&mut self, _destination: &[u8; 32], _message: &[u8], _local_cost: u64) {}
+    fn secret(&self) -> &[u8; 32] {
+	b"this is a thirty-two byte secret"
+    }
+}
+
+pub fn eval_simple<E: AsNoun>(expression: E) -> Noun {
+    let mut engine = TestSideEffectEngine::new();
+    eval(expression.as_noun(), &mut engine, 1000000)
+	.expect("eval_simple expression got an error")
+}
+
 #[cfg(test)]
-mod test {
+fn expect_eval_with<E: AsNoun, R: AsNoun>(
+    engine: &mut TestSideEffectEngine,
+    expression: E,
+    result: R,
+) {
+    assert_eq!(
+	eval(expression.as_noun(), engine, 1000000),
+	Ok(result.as_noun())
+    );
+}
+
+#[cfg(test)]
+fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) -> TestSideEffectEngine {
+    let mut engine = TestSideEffectEngine::new();
+    expect_eval_with(&mut engine, expression, result);
+    engine
+}
+
+#[cfg(test)]
+pub mod test {
     use as_noun::AsNoun;
-    use chacha::{ChaCha, KeyStream};
     use crypto::blake2b::Blake2b;
-    use eval::{eval, SideEffectEngine};
+    use eval::{expect_eval, eval_simple, expect_eval_with};
     use noun::Noun;
     use opcode::*;
     use serialize;
-    use std::collections::HashMap;
-
-    struct TestSideEffectEngine {
-        storage: HashMap<Vec<u8>, Vec<u8>>,
-        rng: ChaCha,
-    }
-
-    impl TestSideEffectEngine {
-        fn new() -> TestSideEffectEngine {
-            TestSideEffectEngine {
-                storage: HashMap::new(),
-                rng: ChaCha::new_chacha20(&[1u8; 32], &[0u8; 8]),
-            }
-        }
-    }
-
-    impl SideEffectEngine for TestSideEffectEngine {
-        fn nearest_neighbor(&mut self, _near: &[u8; 32]) -> [u8; 32] {
-            [0u8; 32]
-        }
-        fn random(&mut self, dest: &mut [u8]) {
-            for b in dest.iter_mut() {
-                *b = 0;
-            }
-            self.rng.xor_read(dest).expect("RNG end reached");
-        }
-        //fn expected_storage_return(&mut self, storage_signing_key: &[u8; 32]) -> u64 { // guess of how much it will pay
-        //    0
-        //}
-        fn load(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-            self.storage.get(key).cloned()
-        }
-        fn store(&mut self, key: &[u8], value: &[u8]) {
-            self.storage.insert(key.into(), value.into());
-        }
-        fn send(&mut self, _destination: &[u8; 32], _message: &[u8], _local_cost: u64) {}
-        fn secret(&self) -> &[u8; 32] {
-            b"this is a thirty-two byte secret"
-        }
-    }
-
-    fn eval_simple<E: AsNoun>(expression: E) -> Noun {
-        let mut engine = TestSideEffectEngine::new();
-        eval(expression.as_noun(), &mut engine, 1000000)
-            .expect("eval_simple expression got an error")
-    }
-
-    fn expect_eval_with<E: AsNoun, R: AsNoun>(
-        engine: &mut TestSideEffectEngine,
-        expression: E,
-        result: R,
-    ) {
-        assert_eq!(
-            eval(expression.as_noun(), engine, 1000000),
-            Ok(result.as_noun())
-        );
-    }
-
-    fn expect_eval<E: AsNoun, R: AsNoun>(expression: E, result: R) -> TestSideEffectEngine {
-        let mut engine = TestSideEffectEngine::new();
-        expect_eval_with(&mut engine, expression, result);
-        engine
-    }
 
     #[test]
     fn literal_op() {
