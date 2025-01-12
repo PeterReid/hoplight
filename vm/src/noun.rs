@@ -79,6 +79,15 @@ impl Noun {
         Noun::from_vec(bs)
     }
 
+    pub fn from_u64_compact(mut source: u64) -> Noun {
+        let mut bs = Vec::new();
+        while source != 0 {
+            bs.push((source & 0xff) as u8);
+            source = source >> 8;
+        }
+        Noun::from_vec(bs)
+    }
+
     pub fn as_usize(&self) -> Option<usize> {
         match self {
             &Noun::Cell(_, _) => None,

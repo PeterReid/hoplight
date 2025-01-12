@@ -9,6 +9,16 @@ pub enum Node {
     Literal(Vec<u8>)
 }
 
+impl Node {
+    pub fn as_symbol(&self) -> Option<&str> {
+        if let Node::Symbol(name) = self {
+            Some(name)
+        } else {
+            None
+        }
+    }
+}
+
 fn parse_some<T: Iterator<Item = Token>>(tokens: &mut T) -> Result<Option<Node>, String> {
     let token = match tokens.next() {
         Some(token) => token,
