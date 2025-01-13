@@ -156,21 +156,15 @@ fn add_bindings(bindings_list: &Node, parent_name_resolutions: &HashMap<String, 
     let definition_positions = dense_tree_positions(definition_exprs.len());
     let definition_tree = build_into_dense_tree(definition_exprs);
 
-    let new_subject_builder = Noun::new_cell(
-        // The left of the new subject is just the old subject
-        Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u8(1)),
-        definition_tree
-    );
-
     let mut name_resolutions = HashMap::new();
     for (name, pos) in parent_name_resolutions.iter() {
-        name_resolutions.insert(name.clone(), add_initial_step(*pos, 0));
+        name_resolutions.insert(name.clone(), add_initial_step(*pos, 1));
     }
 
     for (definition_position, name) in definition_positions.into_iter().zip(names.into_iter()) {
-        name_resolutions.insert(name, add_initial_step(definition_position, 1));
+        name_resolutions.insert(name, add_initial_step(definition_position, 0));
     }
-    Ok((new_subject_builder, name_resolutions))
+    Ok((definition_tree, name_resolutions))
 }
 
 fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<Noun, String> {
@@ -202,7 +196,7 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
                             return Err("Malformed `let` expression".to_string());
                         }
                         let (bindings_evaluator, extended_name_resolutions) = add_bindings(&children[1], name_resolutions)?;
-                        Noun::new_cell(Noun::from_u8(opcode::COMPOSE),
+                        Noun::new_cell(Noun::from_u8(opcode::DEFINE),
                             Noun::new_cell(bindings_evaluator, compile_node(&children[2], &extended_name_resolutions)?))
                     } else {
                         return Err("todo".to_string());
