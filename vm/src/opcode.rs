@@ -23,3 +23,4 @@ pub const ADD: u8 = 21;
 pub const INVERT: u8 = 22;
 pub const XOR: u8 = 23;
 pub const LESS: u8 = 24;
+pub const SEND: u8 = 25;

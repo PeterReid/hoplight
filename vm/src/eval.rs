@@ -428,9 +428,13 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                         self.encrypt(&private_key, &result)?,
                     ))
                 }
-                //11 => { // send
-                //    if let Some((b, c, d)) =
-                //}
+                SEND => {
+                    let (recipient, message) = double_arg(self.eval_on(subject, argument)?)?;
+                    let recipient = key_arg(&recipient)?;
+                    let message = self.serialize(&message)?;
+                    self.side_effector.send(&recipient, &message, 0);
+                    Ok(Noun::from_u8(0)) // Is there anything that SEND should return? 
+                }
                 _ => Err(EvalError::BadOpcode(opcode)),
             };
         }
