@@ -86,6 +86,9 @@ fn build_into_dense_tree(mut ns: Vec<Noun>) -> Noun {
     ns.into_iter().next().unwrap()
 }
 fn dense_tree_positions(count: usize) -> Vec<u64> {
+    if count==0 {
+        return Vec::new();
+    }
     let count = count as u64;
     let max_level_needed = count.ilog2() + 1;
     let spots_in_max_level = 1<<max_level_needed;
@@ -133,6 +136,19 @@ fn initial_step_left() {
     assert_eq!(add_initial_step(0b1, 1), 0b11);
 }
 
+fn add_name_resolutions(parent_name_resolutions: &HashMap<String, u64>, names: Vec<String>) -> HashMap<String, u64> {
+    let definition_positions = dense_tree_positions(names.len());
+    let mut name_resolutions = HashMap::new();
+    for (name, pos) in parent_name_resolutions.iter() {
+        name_resolutions.insert(name.clone(), add_initial_step(*pos, 1));
+    }
+
+    for (definition_position, name) in definition_positions.into_iter().zip(names.into_iter()) {
+        name_resolutions.insert(name, add_initial_step(definition_position, 0));
+    }
+    name_resolutions
+}
+
 fn add_bindings(bindings_list: &Node, parent_name_resolutions: &HashMap<String, u64>) -> Result<(Noun, HashMap<String, u64>), String>{
     let bindings = if let Node::Parent(children) = bindings_list {
         children
@@ -153,18 +169,24 @@ fn add_bindings(bindings_list: &Node, parent_name_resolutions: &HashMap<String, 
             return Err("Expected each item of first argument of `let` expression to be a (name expression) pair".to_string());
         }
     }
-    let definition_positions = dense_tree_positions(definition_exprs.len());
     let definition_tree = build_into_dense_tree(definition_exprs);
-
-    let mut name_resolutions = HashMap::new();
-    for (name, pos) in parent_name_resolutions.iter() {
-        name_resolutions.insert(name.clone(), add_initial_step(*pos, 1));
-    }
-
-    for (definition_position, name) in definition_positions.into_iter().zip(names.into_iter()) {
-        name_resolutions.insert(name, add_initial_step(definition_position, 0));
-    }
+    let name_resolutions = add_name_resolutions(parent_name_resolutions, names);
+    
     Ok((definition_tree, name_resolutions))
+}
+
+fn add_argument_name_resolutions(arguments: &Node, name_resolutions: &HashMap<String, u64>) -> Result<HashMap<String, u64>, String> {
+    let args: Vec<String> = if let Node::Parent(args) = arguments {
+        args.iter()
+            .map(|arg| arg.as_symbol()
+                .map(|name| name.to_string())
+                .ok_or_else(|| "Argument name should be a symbol".to_string()))
+            .collect::<Result<Vec<String>, String>>()?
+    } else {
+        return Err("Arguments to a lambda should be a list".to_string());
+    };
+
+    Ok(add_name_resolutions(name_resolutions, args))
 }
 
 fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<Noun, String> {
@@ -191,15 +213,44 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
                             .collect::<Result<Vec<Noun>, String>>()?;
                         compiled_args.insert(0, Noun::from_u8(native_opcode));
                         vec_to_tree(compiled_args)
-                    } else if function_name == "let" { // (let ((x 10) (y 20)) (x + y))
+                    } else if function_name == "let" { // (let ((x 10) (y 20)) (add x y))
                         if children.len() != 3 {
                             return Err("Malformed `let` expression".to_string());
                         }
                         let (bindings_evaluator, extended_name_resolutions) = add_bindings(&children[1], name_resolutions)?;
                         Noun::new_cell(Noun::from_u8(opcode::DEFINE),
                             Noun::new_cell(bindings_evaluator, compile_node(&children[2], &extended_name_resolutions)?))
-                    } else {
-                        return Err("todo".to_string());
+                    } else if function_name == "lambda" { // (lambda (x y) (add x y))
+                        if children.len() != 3 {
+                            return Err("Malformed `lambda` expression".to_string());
+                        }
+
+                        // The scope's `name_resolutions` are going to be buried two levels down when this is called.
+                        // First it is paired up with the code...
+                        let extended_name_resolutions = add_name_resolutions(name_resolutions, vec![]); // We could potentially give name to the code
+                        // ...then it is paired up with the arguments.
+                        let extended_name_resolutions = add_argument_name_resolutions(&children[1], &extended_name_resolutions)?;
+
+                        let lambda_body = compile_node(&children[2], &extended_name_resolutions)?;
+                        Noun::new_cell(
+                            Noun::new_cell(Noun::from_u8(opcode::LITERAL), lambda_body),
+                            Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u8(1)) // Copy everything in scope into the lambda
+                        )
+                    } else { // function call
+                        if let Some(position) = name_resolutions.get(function_name) {
+                            println!("Function call {}", function_name);
+                            // The rest of the children are the arguments. That must be turned into a tree.
+                            let arg_maker = build_into_dense_tree(children.iter()
+                                .skip(1) // Skip the function name itself
+                                .map(|arg| compile_node(arg, name_resolutions))
+                                .collect::<Result<Vec<Noun>, String>>()?);
+                            
+                            let env_maker = Noun::new_cell(arg_maker, Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u64_compact(*position)));
+                            // The environment is of the format [args [lambda_code lambda_ctx]] 
+                            Noun::new_cell(Noun::from_u8(opcode::CALL), Noun::new_cell(Noun::from_u8(6), env_maker))
+                        } else {
+                            return Err(format!("Unknown function `{}` called", function_name));
+                        }
                     }
                 }
                 _ => {
@@ -270,5 +321,15 @@ mod test {
         compile_and_eval("(let ((x #45) (y #67)) (equal x y))", 1);
         compile_and_eval("(let ((x #45) (y #67) (z #21)) (add x z))", 0x66);
         compile_and_eval("(let ((x #10)) (add x (let ((y #21)) (add x y))))", 0x41);
+    }
+
+    #[test]
+    fn lambda_simple() {
+        // Just make a lambda and call it
+        compile_and_eval("(let ((x #45) (y (lambda (a) (add a #01)))) (y x))", 0x46);
+        // Set a lambda into a variable then call that
+        compile_and_eval("(let ((x #45) (y (lambda (a) (add a #01)))) (let ((z y)) (z x)))", 0x46);
+        // Make sure that variables in scope (x, specifically) are captured properly, even when called outside that scope
+        compile_and_eval("(let ((f (let ((x #05) (y #03)) (lambda (z) (add x z))))) (f #04))", 0x09);
     }
 }
