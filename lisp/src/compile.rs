@@ -41,20 +41,6 @@ fn vec_to_tree(xs: Vec<Noun>) -> Noun {
     ret
 }
 
-fn as_literal(x: &Node) -> Result<Noun, String> {
-    Ok(match x {
-        Node::Literal(bs) => Noun::from_vec(bs.clone()),
-        Node::Symbol(x) => { return Err(format!("A symbol ({}) cannot be part of a literal", x)); },
-        Node::Parent(children) => {
-            if children.is_empty() {
-                return Err("An empty list cannot occur in a literal".to_string());
-            }
-            let children_literals: Vec<Noun> = children.iter().map(as_literal).collect::<Result<Vec<Noun>, String>>()?;
-            vec_to_tree(children_literals)
-        }
-    })
-}
-
 
 // [a,b,c,d,e,f,g] is transformed to:
 //
@@ -198,6 +184,9 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
         Node::Literal(bs) => {
             Noun::new_cell(Noun::from_u8(opcode::LITERAL), Noun::from_vec(bs.clone()))
         }
+        Node::List(children) => {
+            vec_to_tree(children.iter().map(|child| compile_node(child, name_resolutions)).collect::<Result<Vec<Noun>, String>>()?)
+        }
         Node::Parent(children) => {
             let mut children_iter = children.iter();
             let first = children_iter.next().ok_or_else(|| "Tried to compile empty parent node ()".to_string())?;
@@ -254,10 +243,7 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
                     }
                 }
                 _ => {
-                    // This is the beginning of a tree-type literal, apparently, not a function call
-                    Noun::new_cell(
-                        Noun::from_u8(opcode::LITERAL), 
-                        vec_to_tree(children.iter().map(as_literal).collect::<Result<Vec<Noun>, String>>()?))
+                    return Err("Expected a function call-like token".to_string());
                 }
             }
         }
@@ -297,12 +283,13 @@ mod test {
     fn literal() {
         compile_and_eval("#33", vec![0x33]); 
         compile_and_eval("#33", vec![0x33]); 
+        compile_and_eval("[#33 #66]", (vec![0x33], vec![0x66])); 
     }
 
     #[test]
     fn is_cell() {
         compile_and_eval("(is_cell #2244)", 1);
-        compile_and_eval("(is_cell (#2244 #33))", 0);
+        compile_and_eval("(is_cell [#2244 #33])", 0);
     }
 
     #[test]
@@ -312,7 +299,8 @@ mod test {
 
     #[test]
     fn shape() {
-        compile_and_eval("(shape (#665544332211 (#33 #44)))", (6, (1, 1)));
+        compile_and_eval("(shape [#665544332211 [#33 #44]])", (6, (1, 1)));
+        compile_and_eval("[(shape #11223344) (shape #1122)]", (4, 2));
     }
 
     #[test]
@@ -331,5 +319,15 @@ mod test {
         compile_and_eval("(let ((x #45) (y (lambda (a) (add a #01)))) (let ((z y)) (z x)))", 0x46);
         // Make sure that variables in scope (x, specifically) are captured properly, even when called outside that scope
         compile_and_eval("(let ((f (let ((x #05) (y #03)) (lambda (z) (add x z))))) (f #04))", 0x09);
+    }
+
+    #[test]
+    fn guessing_game() {
+        compile_and_eval(r#"
+            (let ((answer #42))
+              (let ((handle_guess (lambda (g) 
+                 (if (less g answer) "too low" (if (less answer g) "too high" "right")))))
+                 [(handle_guess #33) (handle_guess #42) (handle_guess #55)]))
+            "#, (&b"too low"[..], &b"right"[..], &b"too high"[..]));
     }
 }

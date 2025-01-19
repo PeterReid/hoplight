@@ -3,7 +3,9 @@ pub enum Token {
     Literal(Vec<u8>),
     Symbol(String),
     OpenParen,
-    CloseParen
+    CloseParen,
+    OpenBracket,
+    CloseBracket
 }
 
 fn is_symbol_initial(x: char) -> bool {
@@ -56,6 +58,12 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, String>  {
             }
             ')' => {
                 tokens.push(Token::CloseParen);
+            }
+            '[' => {
+                tokens.push(Token::OpenBracket);
+            }
+            ']' => {
+                tokens.push(Token::CloseBracket);
             }
             '#' => { // Hex-encoded literal
                 let mut literal = Vec::new();
@@ -133,6 +141,10 @@ mod test {
     #[test]
     fn tokenize1() {
         assert_eq!(tokenize("(foo)"), Ok(vec![Token::OpenParen, Token::Symbol("foo".to_string()), Token::CloseParen]));
+    }
+    #[test]
+    fn brackets() {
+        assert_eq!(tokenize("[\"test\"]"), Ok(vec![Token::OpenBracket, Token::Literal(b"test".to_vec()), Token::CloseBracket]));
     }
     #[test]
     fn tokenize_str() {

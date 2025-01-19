@@ -6,7 +6,8 @@ use tokenize::Token;
 pub enum Node {
     Parent(Vec<Node>),
     Symbol(String),
-    Literal(Vec<u8>)
+    Literal(Vec<u8>),
+    List(Vec<Node>),
 }
 
 impl Node {
@@ -19,7 +20,29 @@ impl Node {
     }
 }
 
-fn parse_some<T: Iterator<Item = Token>>(tokens: &mut T) -> Result<Option<Node>, String> {
+enum ParseSome {
+    EndBrackets,
+    EndParens,
+    Child(Node),
+}
+impl ParseSome {
+    fn for_parens(self) -> Result<Option<Node>, String> {
+        match self {
+            ParseSome::EndParens => Ok(None),
+            ParseSome::Child(n) => Ok(Some(n)),
+            ParseSome::EndBrackets => Err("Unexpected closing bracket".to_string())
+        }
+    }
+    fn for_brackets(self) -> Result<Option<Node>, String> {
+        match self {
+            ParseSome::EndBrackets => Ok(None),
+            ParseSome::Child(n) => Ok(Some(n)),
+            ParseSome::EndParens => Err("Unexpected closing parentheses".to_string())
+        }
+    }
+}
+
+fn parse_some<T: Iterator<Item = Token>>(tokens: &mut T) -> Result<ParseSome, String> {
     let token = match tokens.next() {
         Some(token) => token,
         None => { return Err("Unexpected end".to_string()); }
@@ -27,19 +50,29 @@ fn parse_some<T: Iterator<Item = Token>>(tokens: &mut T) -> Result<Option<Node>,
     match token {
         Token::OpenParen => {
             let mut children = Vec::new();
-            while let Some(child) = parse_some(tokens)? {
+            while let Some(child) = parse_some(tokens)?.for_parens()? {
                 children.push(child);
             }
-            return Ok(Some(Node::Parent(children)));
+            return Ok(ParseSome::Child(Node::Parent(children)));
         },
         Token::CloseParen => {
-            return Ok(None);
+            return Ok(ParseSome::EndParens);
+        }
+        Token::OpenBracket => {
+            let mut children = Vec::new();
+            while let Some(child) = parse_some(tokens)?.for_brackets()? {
+                children.push(child);
+            }
+            return Ok(ParseSome::Child(Node::List(children)));
+        },
+        Token::CloseBracket => {
+            return Ok(ParseSome::EndBrackets);
         }
         Token::Symbol(x) => {
-            return Ok(Some(Node::Symbol(x)));
+            return Ok(ParseSome::Child(Node::Symbol(x)));
         },
         Token::Literal(x) => {
-            return Ok(Some(Node::Literal(x)));
+            return Ok(ParseSome::Child(Node::Literal(x)));
         }
     }
 }
@@ -47,8 +80,7 @@ fn parse_some<T: Iterator<Item = Token>>(tokens: &mut T) -> Result<Option<Node>,
 pub fn parse(code: &str) -> Result<Node, String> {
     let tokens = tokenize::tokenize(code)?;
     let mut tokens_iter = tokens.into_iter();
-    let root = parse_some(&mut tokens_iter)?.ok_or("no node".to_string())?;
-
+    let root = if let ParseSome::Child(root) = parse_some(&mut tokens_iter)? { root } else { return Err("no node".to_string()) };
     
     if tokens_iter.next().is_some() {
         return Err("Expected only one root node".to_string());
@@ -73,6 +105,13 @@ mod test {
                     Node::Literal([0x55].to_vec())
                 ])
             ])
+        );
+    }
+    #[test]
+    fn parse2() {
+        assert_eq!(
+            parse("[#44 #88]").unwrap(),
+            Node::List(vec![Node::Literal([0x44].to_vec()), Node::Literal([0x88].to_vec())])
         );
     }
 }
