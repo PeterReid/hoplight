@@ -9,15 +9,15 @@ pub fn add(x: &Noun, y: &Noun) -> Option<Noun> {
     
     let mut ret = long.to_vec();
     let mut carry = 0;
-    let (paired, unpaired) = ret.split_at_mut(short.len());
+    let (unpaired, paired) = ret.split_at_mut(long.len() - short.len());
     
-    for (x, y) in paired.iter_mut().zip(short.iter()) {
+    for (x, y) in paired.iter_mut().rev().zip(short.iter().rev()) {
         let z = (*x as u16) + (*y as u16) + carry;
         *x = z as u8;
         carry = z >> 8;
     }
     
-    for x in unpaired.iter_mut() {
+    for x in unpaired.iter_mut().rev() {
         let z = (*x as u16) + carry;
         *x = z as u8;
         carry = z >> 8;
@@ -46,17 +46,17 @@ pub fn less(x: &Noun, y: &Noun) -> Option<bool> {
     let y_bytes = y.as_bytes()?;
 
     let common_len = min(x_bytes.len(), y_bytes.len());
-    let (x_prefix, x_suffix) = x_bytes.split_at(common_len);
-    let (y_prefix, y_suffix) = y_bytes.split_at(common_len);
+    let (x_prefix, x_suffix) = x_bytes.split_at(x_bytes.len() - common_len);
+    let (y_prefix, y_suffix) = y_bytes.split_at(y_bytes.len() - common_len);
     
     let mut overall_lesser = false;
-    for (x, y) in x_prefix.iter().zip(y_prefix.iter()) {
+    for (x, y) in x_suffix.iter().rev().zip(y_suffix.iter().rev()) {
         overall_lesser = (overall_lesser & (*x <= *y)) | (*x < *y);
     }
-    for x in x_suffix {
+    for x in x_prefix {
         overall_lesser = overall_lesser & (*x == 0);
     }
-    for y in y_suffix {
+    for y in y_prefix {
         overall_lesser = overall_lesser | (*y != 0);
     }
     return Some(overall_lesser);
@@ -69,4 +69,22 @@ fn less_cases() {
     assert_eq!(less(&Noun::from_usize_compact(30), &Noun::from_usize_compact(5)), Some(false));
     assert_eq!(less(&Noun::from_usize_compact(30), &Noun::from_usize_compact(0x100)), Some(true));
     assert_eq!(less(&Noun::from_usize_compact(0x1234), &Noun::from_usize_compact(0x56)), Some(false));
+}
+
+#[test]
+fn less_endian() {
+    assert_eq!(less(&Noun::from_vec(vec![0x01, 0x02]), &Noun::from_vec(vec![0x02, 0x01])), Some(true));
+}
+
+#[test]
+fn add_endian() {
+    assert_eq!(add(
+        &Noun::from_vec(    vec![0x11, 0x22, 0x33, 0x44]),
+        &Noun::from_vec(    vec![0xff, 0xff, 0xff, 0xfe])), 
+        Some(Noun::from_vec(vec![0x11, 0x22, 0x33, 0x42])));
+    assert_eq!(add(
+        &Noun::from_vec(    vec![0x10, 0x80, 0x20]),
+        &Noun::from_vec(    vec![0x00, 0x80, 0x00])), 
+        Some(Noun::from_vec(vec![0x11, 0x00, 0x20])));
+       
 }

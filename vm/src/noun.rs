@@ -76,6 +76,7 @@ impl Noun {
             bs.push((source & 0xff) as u8);
             source = source >> 8;
         }
+        bs.reverse();
         Noun::from_vec(bs)
     }
 
@@ -85,6 +86,7 @@ impl Noun {
             bs.push((source & 0xff) as u8);
             source = source >> 8;
         }
+        bs.reverse();
         Noun::from_vec(bs)
     }
 

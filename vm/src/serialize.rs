@@ -201,8 +201,8 @@ mod test {
             serialize(&(&atom[..]).as_noun(), 20000),
             Ok([
                 192,
-                (10925 & 0xff) as u8,
                 (10925 >> 8) as u8,
+                (10925 & 0xff) as u8,
                 255,
                 128 | 42,
                 85
