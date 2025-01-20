@@ -190,6 +190,16 @@ fn test_combine_axis_indices() {
     assert_eq!(combine_axis_indices(5, 3), 11);
 }
 
+fn literal_node_to_noun(node: &Node) -> Option<Noun> {
+    match node {
+        Node::Literal(bs) => Some(Noun::from_vec(bs.clone())),
+        Node::List(children) => {
+            Some(vec_to_tree(children.iter().map(literal_node_to_noun).collect::<Option<Vec<Noun>>>()?))
+        }
+        _ => None
+    }
+}
+
 fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>, self_name: Option<&str>) -> Result<Noun, String> {
     Ok(match node {
         Node::Symbol(variable_name) => {
@@ -200,7 +210,13 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>, self_name:
             Noun::new_cell(Noun::from_u8(opcode::LITERAL), Noun::from_vec(bs.clone()))
         }
         Node::List(children) => {
-            vec_to_tree(children.iter().map(|child| compile_node(child, name_resolutions, None)).collect::<Result<Vec<Noun>, String>>()?)
+            if let Some(entirely_literal) = literal_node_to_noun(node) {
+                // There are no expressions inside that need to be evalulated, so we can
+                // embed this entire tree into the code directly.
+                Noun::new_cell(Noun::from_u8(opcode::LITERAL), entirely_literal)
+            } else {
+                vec_to_tree(children.iter().map(|child| compile_node(child, name_resolutions, None)).collect::<Result<Vec<Noun>, String>>()?)
+            }
         }
         Node::Parent(children) => {
             let mut children_iter = children.iter();
@@ -339,8 +355,13 @@ mod test {
     #[test]
     fn literal() {
         compile_and_eval("#33", vec![0x33]); 
-        compile_and_eval("#33", vec![0x33]); 
-        compile_and_eval("[#33 #66]", (vec![0x33], vec![0x66])); 
+        compile_and_eval("[[#22 #55] #33]", ((0x22, 0x55), (0x33))); 
+    }
+
+    #[test]
+    fn literals_inlined() {
+        // The literal should appear in the code directly, rather than being constructed at runtime from parts
+        assert!(code_contains(compile_and_eval("[#33 #66]", (0x33, 0x66)), (0x33, 0x66))); 
     }
 
     #[test]
