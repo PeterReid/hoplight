@@ -369,8 +369,8 @@ mod test {
 
     #[test]
     fn is_cell() {
-        compile_and_eval("(is_cell #2244)", 0);
-        compile_and_eval("(is_cell [#2244 #33])", 1);
+        compile_and_eval("(is_cell #2244)", false);
+        compile_and_eval("(is_cell [#2244 #33])", true);
     }
 
     #[test]
