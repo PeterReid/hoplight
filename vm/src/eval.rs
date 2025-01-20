@@ -598,12 +598,12 @@ pub mod test {
 
     #[test]
     fn if_true() {
-        expect_eval((42, (6, (1, 0), (HASH, 0, 1), (1, 233))), hash(42));
+        expect_eval((42, (6, (1, 1), (HASH, 0, 1), (1, 233))), hash(42));
     }
 
     #[test]
     fn if_false() {
-        expect_eval((42, (6, (1, 1), (4, 0, 1), (1, 233))), 233);
+        expect_eval((42, (6, (1, 0), (4, 0, 1), (1, 233))), 233);
     }
 
     #[test]
@@ -659,7 +659,7 @@ pub mod test {
             (21, 2, 21),
         );
         let hash = eval_simple((21, HASH, ((LITERAL, LITERAL), (AXIS, 1))));
-        expect_eval_with(&mut engine, (hash, (RETRIEVE_BY_HASH, (AXIS, 1))), (0, 21));
+        expect_eval_with(&mut engine, (hash, (RETRIEVE_BY_HASH, (AXIS, 1))), (true, 21));
     }
 
     #[test]
@@ -678,7 +678,7 @@ pub mod test {
         expect_eval_with(
             &mut engine,
             (&b"color"[..], (RETRIEVE_BY_KEY, (AXIS, 1))),
-            (0, &b"orange"[..]),
+            (true, &b"orange"[..]),
         );
     }
 
