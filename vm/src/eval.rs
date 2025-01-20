@@ -241,11 +241,11 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     let (b, c, d) = triple_arg(argument)?;
                     let condition = self.eval_on(subject.clone(), b)?;
                     match condition.as_u8() {
-                        Some(0) => {
+                        Some(1) => {
                             formula = c;
                             continue 'tail_recurse;
                         }
-                        Some(1) => {
+                        Some(0) => {
                             formula = d;
                             continue 'tail_recurse;
                         }

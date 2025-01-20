@@ -369,13 +369,13 @@ mod test {
 
     #[test]
     fn is_cell() {
-        compile_and_eval("(is_cell #2244)", 1);
-        compile_and_eval("(is_cell [#2244 #33])", 0);
+        compile_and_eval("(is_cell #2244)", 0);
+        compile_and_eval("(is_cell [#2244 #33])", 1);
     }
 
     #[test]
     fn iff() {
-        compile_and_eval("(if #00 #33 #44)", 0x33);
+        compile_and_eval("(if #01 #33 #44)", 0x33);
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod test {
     #[test]
     fn let_simple() {
         compile_and_eval("(let ((x #45)) x)", 0x45);
-        compile_and_eval("(let ((x #45) (y #67)) (equal x y))", 1);
+        compile_and_eval("(let ((x #45) (y #67)) (equal x y))", 0);
         compile_and_eval("(let ((x #45) (y #67) (z #21)) (add x z))", 0x66);
         compile_and_eval("(let ((x #10)) (add x (let ((y #21)) (add x y))))", 0x41);
     }

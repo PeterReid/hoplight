@@ -55,7 +55,7 @@ impl Noun {
     }
 
     pub fn from_bool(source: bool) -> Noun {
-        Noun::from_u8(if source { 0 } else { 1 })
+        Noun::from_u8(if source { 1 } else { 0 })
     }
 
     pub fn from_u8(source: u8) -> Noun {
