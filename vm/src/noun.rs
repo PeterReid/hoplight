@@ -106,13 +106,37 @@ impl Noun {
                         accum = accum | ((b as usize) << shift);
                     }
                     shift += 8;
-                    overflow_tester = overflow_tester << 8;
+                    overflow_tester = overflow_tester.overflowing_shl(8).0;
                 }
                 Some(accum)
             }
         }
     }
 
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            &Noun::Cell(_, _) => None,
+            &Noun::SmallAtom { value, length: _ } => {
+                u32::from_le_bytes(value).try_into().ok()
+            }
+            &Noun::Atom(ref xs) => {
+                let mut shift = 0u8;
+                let mut accum: u64 = 0;
+                let mut overflow_tester: u64 = 0xff;
+                for b in xs.iter().map(|b| *b) {
+                    if b != 0 {
+                        if overflow_tester == 0 {
+                            return None; // too big to be a usize
+                        }
+                        accum = accum | ((b as u64) << shift);
+                    }
+                    shift += 8;
+                    overflow_tester = overflow_tester.overflowing_shl(8).0;
+                }
+                Some(accum)
+            }
+        }
+    }
     pub fn as_u8(&self) -> Option<u8> {
         match self {
             &Noun::Cell(_, _) => None,

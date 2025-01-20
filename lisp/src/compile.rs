@@ -26,6 +26,7 @@ fn native_opcode_for_name(name: &str) -> Option<(u8, usize)> {
         "invert" => (opcode::INVERT, 1),
         "xor" => (opcode::XOR, 2),
         "less" => (opcode::LESS, 2),
+        "reshape" => (opcode::RESHAPE, 2),
         _ => { return None; }
     })
 }
@@ -149,7 +150,7 @@ fn add_bindings(bindings_list: &Node, parent_name_resolutions: &HashMap<String, 
             if name_and_expr.len() != 2 { return Err("Malformed (name expression) pair in `let` expression".to_string()); }
             let name = name_and_expr[0].as_symbol()
                 .ok_or_else(|| "Expected symbol as the introduced variable name in `let` expression".to_string())?;
-            definition_exprs.push(compile_node(&name_and_expr[1], parent_name_resolutions)?);
+            definition_exprs.push(compile_node(&name_and_expr[1], parent_name_resolutions, Some(name))?);
             names.push(name.to_string());
         } else {
             return Err("Expected each item of first argument of `let` expression to be a (name expression) pair".to_string());
@@ -175,7 +176,21 @@ fn add_argument_name_resolutions(arguments: &Node, name_resolutions: &HashMap<St
     Ok(add_name_resolutions(name_resolutions, args))
 }
 
-fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<Noun, String> {
+fn combine_axis_indices(applied_first: u64, applied_second: u64) -> u64 {
+    let path_bits_in_second = applied_second.ilog2();
+    let (left_bits, overflow) = applied_first.overflowing_shl(path_bits_in_second);
+    assert!(!overflow, "path to variable too long");
+    let right_path = applied_second & !(1 << path_bits_in_second);
+    left_bits | right_path
+}
+
+#[test]
+fn test_combine_axis_indices() {
+    assert_eq!(combine_axis_indices(2, 2), 4);
+    assert_eq!(combine_axis_indices(5, 3), 11);
+}
+
+fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>, self_name: Option<&str>) -> Result<Noun, String> {
     Ok(match node {
         Node::Symbol(variable_name) => {
             let position = name_resolutions.get(variable_name).ok_or_else(|| format!("Unresolved variable name: {}", variable_name))?;
@@ -185,7 +200,7 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
             Noun::new_cell(Noun::from_u8(opcode::LITERAL), Noun::from_vec(bs.clone()))
         }
         Node::List(children) => {
-            vec_to_tree(children.iter().map(|child| compile_node(child, name_resolutions)).collect::<Result<Vec<Noun>, String>>()?)
+            vec_to_tree(children.iter().map(|child| compile_node(child, name_resolutions, None)).collect::<Result<Vec<Noun>, String>>()?)
         }
         Node::Parent(children) => {
             let mut children_iter = children.iter();
@@ -198,17 +213,39 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
                                 function_name, expected_argc, children.len()-1));
                         }
                         let mut compiled_args: Vec<Noun> = children_iter
-                            .map(|arg| compile_node(arg, name_resolutions))
+                            .map(|arg| compile_node(arg, name_resolutions, None))
                             .collect::<Result<Vec<Noun>, String>>()?;
                         compiled_args.insert(0, Noun::from_u8(native_opcode));
                         vec_to_tree(compiled_args)
+                    } else if function_name == "axis" {
+                        if children.len() != 3 {
+                            return Err("Malformed `axis` expression".to_string());
+                        }
+                        // (axis x 5) can be tranformed into just [AXIS _]
+                        // (axis (f a b c) 5)  =>  [COMPOSE (f a b c) (AXIS 5)]
+                        // (axis (f a b c) (g x y z)) [RECURSE (f a b c) ([LITERAL AXIS] (g x y z))]
+                        let ref object = children[1];
+                        let ref index = children[2];
+                        if let (Node::Symbol(variable), Node::Literal(index)) = (object, index) {
+                            let index = Noun::from_vec(index.clone()).as_u64().ok_or_else(|| format!("{:?} is too big to be an index", index))?;
+                            let name_position = name_resolutions.get(variable).ok_or_else(|| format!("Unknown variable {}", variable))?;
+                            let combined_position = combine_axis_indices(*name_position, index);
+                            Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u64_compact(combined_position))
+                        } else {
+                            let subject_maker = compile_node(&object, name_resolutions, None)?;
+                            let index_maker = compile_node(&index, name_resolutions, None)?;
+
+                            let axis_opcode_maker = Noun::new_cell(Noun::from_u8(opcode::LITERAL), Noun::from_u8(opcode::AXIS));
+                            let apply_index_maker = Noun::new_cell(axis_opcode_maker, index_maker);
+                            Noun::new_cell(Noun::from_u8(opcode::RECURSE), Noun::new_cell(subject_maker, apply_index_maker))
+                        }
                     } else if function_name == "let" { // (let ((x 10) (y 20)) (add x y))
                         if children.len() != 3 {
                             return Err("Malformed `let` expression".to_string());
                         }
                         let (bindings_evaluator, extended_name_resolutions) = add_bindings(&children[1], name_resolutions)?;
                         Noun::new_cell(Noun::from_u8(opcode::DEFINE),
-                            Noun::new_cell(bindings_evaluator, compile_node(&children[2], &extended_name_resolutions)?))
+                            Noun::new_cell(bindings_evaluator, compile_node(&children[2], &extended_name_resolutions, None)?))
                     } else if function_name == "lambda" { // (lambda (x y) (add x y))
                         if children.len() != 3 {
                             return Err("Malformed `lambda` expression".to_string());
@@ -216,11 +253,15 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
 
                         // The scope's `name_resolutions` are going to be buried two levels down when this is called.
                         // First it is paired up with the code...
-                        let extended_name_resolutions = add_name_resolutions(name_resolutions, vec![]); // We could potentially give name to the code
+                        let mut extended_name_resolutions = add_name_resolutions(name_resolutions, vec![]);
+                        // If a name is given to this with a wrapping `let`, then the scope and code are collectively known as that.
+                        if let Some(self_name) = self_name {
+                            extended_name_resolutions.insert(self_name.to_string(), 1);
+                        }
                         // ...then it is paired up with the arguments.
                         let extended_name_resolutions = add_argument_name_resolutions(&children[1], &extended_name_resolutions)?;
 
-                        let lambda_body = compile_node(&children[2], &extended_name_resolutions)?;
+                        let lambda_body = compile_node(&children[2], &extended_name_resolutions, None)?;
                         Noun::new_cell(
                             Noun::new_cell(Noun::from_u8(opcode::LITERAL), lambda_body),
                             Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u8(1)) // Copy everything in scope into the lambda
@@ -231,7 +272,7 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>) -> Result<
                             // The rest of the children are the arguments. That must be turned into a tree.
                             let arg_maker = build_into_dense_tree(children.iter()
                                 .skip(1) // Skip the function name itself
-                                .map(|arg| compile_node(arg, name_resolutions))
+                                .map(|arg| compile_node(arg, name_resolutions, None))
                                 .collect::<Result<Vec<Noun>, String>>()?);
                             
                             let env_maker = Noun::new_cell(arg_maker, Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u64_compact(*position)));
@@ -261,7 +302,7 @@ pub fn compile(code: &str) -> Result<Noun, String> {
     println!("Compiled to {:?}", ast);
     // It seems like we need a final pass that resolves AXIS references for symbols to their actual places
     let x = HashMap::new();
-    compile_node(&ast, &x)
+    compile_node(&ast, &x, None)
 }
 
 #[cfg(test)]
@@ -270,13 +311,29 @@ mod test {
     use vm::AsNoun;
     use vm::Noun;
 
-    fn compile_and_eval<E: AsNoun>(code: &str, expected: E) {
+    fn compile_and_eval<E: AsNoun>(code: &str, expected: E) -> Noun {
         let code_noun = compile(code).expect("compile failed");
         println!("Code: {:?}", code_noun);
         let subject_and_code = Noun::new_cell(Noun::from_u8(0), code_noun);
-        let ret = vm::eval_simple(subject_and_code);
+        let ret = vm::eval_simple(subject_and_code.clone());
 
-        assert_eq!(ret, expected.as_noun())
+        assert_eq!(ret, expected.as_noun());
+        subject_and_code
+    }
+
+    fn noun_contains(noun: &Noun, needle: &Noun) -> bool {
+        if noun == needle {
+            return true;
+        }
+        if let Some((left, right)) = noun.as_cell() {
+            noun_contains(left, needle) || noun_contains(right, needle)
+        } else {
+            false
+        }
+    }
+
+    fn code_contains<T: AsNoun>(code: Noun,  needle: T) -> bool {
+        noun_contains(&code, &needle.as_noun())
     }
 
     #[test]
@@ -329,5 +386,31 @@ mod test {
                  (if (less g answer) "too low" (if (less answer g) "too high" "right")))))
                  [(handle_guess #33) (handle_guess #42) (handle_guess #55)]))
             "#, (&b"too low"[..], &b"right"[..], &b"too high"[..]));
+    }
+
+    #[test]
+    fn axis_simple() {
+        compile_and_eval("(axis [#56 #70] #03)", 0x70);
+    }
+
+    #[test]
+    fn axis_optimization() {
+        // The `axis` operation here should get combined with the variable access into a 
+        // single nock `axis`, leaving no copy of the original index in the code
+        assert!(!code_contains(compile_and_eval("(let ((x [#01 #02 #03 #04 #05 #06 #07 #08])) (axis x #ff))", 0x08), 0xff));
+
+        // If we are `axis`ing into a complex expression, that can't be optimized away
+        assert!(code_contains(compile_and_eval("(axis (reshape #0102030405060708 [#01 #01 #01 #01 #01 #01 #01 #01]) #ff)", 0x08), 0xff));
+
+        // TODO: Test the `COMPOSE` optimization
+    }
+
+    #[test]
+    fn recursion() {
+        compile_and_eval(r#"
+            (let ((reverse (lambda (x)
+                     (if (is_cell x) [(reverse (axis x #03)) (reverse (axis x #02))] x))
+                 )) (reverse [[#06 [#07 #08]] #09]))
+            "#, (9, ((8, 7), 6)));
     }
 }
