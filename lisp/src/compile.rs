@@ -55,8 +55,6 @@ fn build_into_dense_tree(mut ns: Vec<Noun>) -> Noun {
     assert!(!ns.is_empty());
     let mut round = 0;
     while ns.len() > 1 {
-        println!("at top, ns = {:?}", ns);
-
         round += 1;
         assert!(round < 10);
         let mut packed_ns = Vec::new();
@@ -247,6 +245,11 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>, self_name:
                             let name_position = name_resolutions.get(variable).ok_or_else(|| format!("Unknown variable {}", variable))?;
                             let combined_position = combine_axis_indices(*name_position, index);
                             Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_u64_compact(combined_position))
+                        } else if let Node::Literal(index) = index {
+                            let subject_maker = compile_node(&object, name_resolutions, None)?;
+                            Noun::new_cell(Noun::from_u8(opcode::COMPOSE), Noun::new_cell(
+                                subject_maker,
+                                Noun::new_cell(Noun::from_u8(opcode::AXIS), Noun::from_vec(index.clone()))))
                         } else {
                             let subject_maker = compile_node(&object, name_resolutions, None)?;
                             let index_maker = compile_node(&index, name_resolutions, None)?;
@@ -284,7 +287,6 @@ fn compile_node(node: &Node, name_resolutions: &HashMap<String, u64>, self_name:
                         )
                     } else { // function call
                         if let Some(position) = name_resolutions.get(function_name) {
-                            println!("Function call {}", function_name);
                             // The rest of the children are the arguments. That must be turned into a tree.
                             let arg_maker = build_into_dense_tree(children.iter()
                                 .skip(1) // Skip the function name itself
@@ -326,6 +328,7 @@ mod test {
     use super::compile;
     use vm::AsNoun;
     use vm::Noun;
+    use vm::opcode;
 
     fn compile_and_eval<E: AsNoun>(code: &str, expected: E) -> Noun {
         let code_noun = compile(code).expect("compile failed");
@@ -420,10 +423,19 @@ mod test {
         // single nock `axis`, leaving no copy of the original index in the code
         assert!(!code_contains(compile_and_eval("(let ((x [#01 #02 #03 #04 #05 #06 #07 #08])) (axis x #ff))", 0x08), 0xff));
 
-        // If we are `axis`ing into a complex expression, that can't be optimized away
-        assert!(code_contains(compile_and_eval("(axis (reshape #0102030405060708 [#01 #01 #01 #01 #01 #01 #01 #01]) #ff)", 0x08), 0xff));
+        // If we are `axis`ing into a complex expression, that index can't be optimized away
+        // But if it's a constant, we should see (AXIS constant) in the code, a sign that the COMPOSE
+        // optimization for axis has been applied. (Lacking this optimization, the code would contain
+        // ((LITERAL axis) (LITERAL constant))
+        assert!(code_contains(compile_and_eval(
+            "(axis (reshape #0102030405060708 [#01 #01 #01 #01 #01 #01 #01 #01]) #ff)",
+            0x08),
+            (opcode::AXIS, 0xff)));
+    }
 
-        // TODO: Test the `COMPOSE` optimization
+    #[test]
+    fn axis_with_computed_index() {
+        compile_and_eval("(axis [#31 #32] (if (equal #ff #ee) #02 #03))", 0x32);
     }
 
     #[test]
