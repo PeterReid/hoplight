@@ -24,3 +24,7 @@ pub const INVERT: u8 = 22;
 pub const XOR: u8 = 23;
 pub const LESS: u8 = 24;
 pub const SEND: u8 = 25;
+pub const EXECUTE_AS: u8 = 26;
+pub const NEIGHBORS_NEAR: u8 = 27;
+pub const START_NEIGHBORING: u8 = 28;
+

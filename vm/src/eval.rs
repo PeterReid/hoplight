@@ -16,6 +16,7 @@ use math::{add, invert, less, xor};
 use as_noun::AsNoun;
 use chacha::{ChaCha, KeyStream};
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvalError {
@@ -37,6 +38,8 @@ pub enum EvalError {
     BadShape,
     DecryptionFailed,
     NonAtomicMath,
+    BadExecuteAsBody,
+    BadExecuteAsCounter,
 }
 
 fn double_arg(noun: Noun) -> Result<(Noun, Noun), EvalError> {
@@ -77,11 +80,15 @@ pub trait SideEffectEngine {
     fn store(&mut self, key: &[u8], value: &[u8]);
     fn send(&mut self, destination: &[u8; 32], message: &[u8], local_cost: u64);
     fn secret(&self) -> &[u8; 32];
+    fn ticks_for(&self, executor: &[u8; 32]) -> Ticks; // How much "credit" an account has, at least that the engine is willing to spend right now
+    fn consume_counter(&mut self, counter: &[u8; 8], private_key: &[u8; 32]) -> bool;
 }
 
 struct Computation<'a, S: 'a> {
     ticks_remaining: Ticks,
+    executing_as: [u8; 32],
     side_effector: &'a mut S,
+    ticks_for: HashMap<[u8; 32], Ticks>,
 }
 
 impl From<CostError> for EvalError {
@@ -113,6 +120,20 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
             Ok(Noun::from_bool(false))
         }
     }
+
+    fn switch_to_runner(&mut self, private_key: &[u8; 32]) -> [u8; 32] {
+        let was_running_as = self.executing_as;
+        self.ticks_for.insert(self.executing_as, self.ticks_remaining.clone());
+        self.executing_as = *private_key;
+
+        let ref mut ticks_for = self.ticks_for;
+        let ref mut side_effector = self.side_effector;
+        self.ticks_remaining = ticks_for.entry(*private_key).or_insert_with(|| {
+            side_effector.ticks_for(private_key)
+        }).clone();
+        was_running_as
+    }
+
 
     /// TODO: This description is not very precise:
     /// The private key corresponding to an atom is only computable by the secret holder.
@@ -435,6 +456,33 @@ impl<'a, S: SideEffectEngine> Computation<'a, S> {
                     self.side_effector.send(&recipient, &message, 0);
                     Ok(Noun::from_u8(0)) // Is there anything that SEND should return? 
                 }
+                EXECUTE_AS => {
+                    let (new_subject, runner_public_key, counter_and_body) = triple_arg(self.eval_on(subject, argument)?)?;
+                    let runner_public_key_bytes = key_arg(&runner_public_key)?;
+                    let (counter, body_ciphertext) = double_arg(counter_and_body)?;
+                    let body_ciphertext = bytes_arg(&body_ciphertext)?;
+                    let counter: &[u8; 8] = bytes_arg(&counter)?.try_into().map_err(|_| EvalError::BadExecuteAsCounter)?;
+
+                    let runner_private_key = self.private_symmetric_key_for(&runner_public_key, false)?;
+                    let body = self.decrypt(&runner_private_key, &body_ciphertext)?.ok_or(EvalError::BadExecuteAsBody)?;
+
+                    if !self.side_effector.consume_counter(counter, &runner_public_key_bytes) {
+                        return Err(EvalError::BadExecuteAsCounter);
+                    }
+
+                    let old_runner = self.switch_to_runner(&runner_public_key_bytes);
+                    let ret = self.eval_on(new_subject, body);
+                    self.switch_to_runner(&old_runner);
+                    ret
+                }
+                //SET_REPLY_ADDRESS => {
+                //    self.side_effector.set_reply_address(&self.executing_as);
+                //    Ok(Noun::from_bool(true))
+                //}
+                //START_NEIGHBORING => {
+                //}
+                //NEIGHBORS_NEAR => {
+                //}
                 _ => Err(EvalError::BadOpcode(opcode)),
             };
         }
@@ -458,6 +506,8 @@ pub fn eval<S: SideEffectEngine>(
         Computation {
             ticks_remaining: Ticks::new(tick_limit),
             side_effector: side_effector,
+            executing_as: [0u8; 32],
+            ticks_for: HashMap::new(),  
         }
         .eval_on(subject, formula)
     } else {
@@ -501,6 +551,12 @@ impl SideEffectEngine for TestSideEffectEngine {
     fn send(&mut self, _destination: &[u8; 32], _message: &[u8], _local_cost: u64) {}
     fn secret(&self) -> &[u8; 32] {
 	b"this is a thirty-two byte secret"
+    }
+    fn ticks_for(&self, _executor: &[u8; 32]) -> Ticks {
+        Ticks::new(1_000_000)
+    }
+    fn consume_counter(&mut self, _counter: &[u8; 8], _private_key: &[u8; 32]) -> bool {
+        true
     }
 }
 
